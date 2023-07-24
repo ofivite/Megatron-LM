@@ -417,9 +417,14 @@ def core_transformer_config_from_args(args):
         kw_args['activation_func'] = F.silu
         kw_args['gated_linear_unit'] = True
         kw_args['bias_gelu_fusion'] = False
+    
+    # weight initialization
     if args.init_method_type == 'normal':
         kw_args['init_method'] = init_method_normal(args.init_method_std, args.use_mup)
-        kw_args['output_layer_init_method'] = scaled_init_method_normal(args.init_method_std, args.num_layers)
+        if args.use_mup:
+            kw_args['output_layer_init_method'] = init_method_normal(args.init_method_std, args.use_mup)
+        else:
+            kw_args['output_layer_init_method'] = scaled_init_method_normal(args.init_method_std, args.num_layers)
     elif args.init_method_type == 'xavier_uniform':
         if args.use_mup:
             raise NotImplementedError("Xavier uniform init is not yet supported together with muP.")
@@ -427,6 +432,9 @@ def core_transformer_config_from_args(args):
         kw_args['output_layer_init_method'] = torch.nn.init.xavier_uniform_
     else:
         raise ValueError(f"Unknown init_method_type: {args.init_method_type}")
+
+    # whether to scale self-attention scores by 1/d_model instead of 1/sqrt(d_model)
+    kw_args['use_mup_norm_factor'] = True if args.use_mup else False 
 
     return TransformerConfig(**kw_args)
 
