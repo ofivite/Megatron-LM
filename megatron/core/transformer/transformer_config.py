@@ -7,7 +7,6 @@ import torch
 import torch.nn.functional as F
 
 from megatron.core import ModelParallelConfig
-from megatron.core.utils import init_method_normal, scaled_init_method_normal
 
 @dataclass
 class TransformerConfig(ModelParallelConfig):
@@ -195,10 +194,3 @@ class TransformerConfig(ModelParallelConfig):
 
             if self.activation_func != F.gelu:
                 raise ValueError(f'When bias_gelu_fusion is True, activation_func must be F.gelu.')
-
-        if self.init_method is None:
-            self.init_method = init_method_normal(self.init_method_std)
-
-        if self.output_layer_init_method is None:
-            self.output_layer_init_method = scaled_init_method_normal(self.init_method_std, self.num_layers)
-

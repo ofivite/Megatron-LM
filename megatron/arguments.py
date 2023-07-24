@@ -15,6 +15,7 @@ from megatron.model.enums import PositionEmbeddingType
 from tools.retro.utils import get_args_path as get_retro_args_path
 
 from megatron.core.transformer import TransformerConfig
+from megatron.core.utils import init_method_normal, scaled_init_method_normal
 
 def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     """Parse all arguments."""
@@ -416,9 +417,16 @@ def core_transformer_config_from_args(args):
         kw_args['activation_func'] = F.silu
         kw_args['gated_linear_unit'] = True
         kw_args['bias_gelu_fusion'] = False
-    if args.init_method_xavier_uniform:
+    if args.init_method_type == 'normal':
+        kw_args['init_method'] = init_method_normal(args.init_method_std, args.use_mup)
+        kw_args['output_layer_init_method'] = scaled_init_method_normal(args.init_method_std, args.num_layers)
+    elif args.init_method_type == 'xavier_uniform':
+        if args.use_mup:
+            raise NotImplementedError("Xavier uniform init is not yet supported together with muP.")
         kw_args['init_method'] = torch.nn.init.xavier_uniform_
-        kw_args['scaled_init_method'] = torch.nn.init.xavier_uniform_
+        kw_args['output_layer_init_method'] = torch.nn.init.xavier_uniform_
+    else:
+        raise ValueError(f"Unknown init_method_type: {args.init_method_type}")
 
     return TransformerConfig(**kw_args)
 
@@ -747,6 +755,8 @@ def _add_training_args(parser):
                        'uniformly divided recompute unit, '
                        '2) block: the number of individual Transformer layers '
                        'to recompute within each pipeline stage.')
+    group.add_argument('--use-mup', type=bool, default=False,
+                       help='Whether to enable mu parametrisation of the model.')
 
     # deprecated
     group.add_argument('--checkpoint-activations', action='store_true',
@@ -825,12 +835,12 @@ def _add_initialization_args(parser):
     group.add_argument('--data-parallel-random-init', action='store_true',
                        help='Enable random initialization of params '
                        'across data parallel ranks')
+    group.add_argument('--init-method-type', type=str, default='normal',
+                       choices=['normal', 'xavier_uniform'],
+                       help='Method of weight initialisation')
     group.add_argument('--init-method-std', type=float, default=0.02,
-                       help='Standard deviation of the zero mean normal '
-                       'distribution used for weight initialization.')
-    group.add_argument('--init-method-xavier-uniform', action='store_true',
-                       help='Enable Xavier uniform parameter initialization')
-
+                       help='In case --init-method-type==normal, standard deviation'
+                       'of the zero mean normal distribution used for weight initialization')
     return parser
 
 

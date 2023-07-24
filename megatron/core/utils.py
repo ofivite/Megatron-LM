@@ -146,12 +146,26 @@ def safely_set_viewless_tensor_data(tensor, new_data_tensor):
     assert_viewless_tensor(tensor, extra_msg = "FYI, tensor._base has shape %s, and new_data_tensor has shape %s." % ("--" if tensor._base is None else tensor._base.shape, new_data_tensor.shape))
     tensor.data = new_data_tensor
 
-def init_method_normal(sigma):
-    """Init method based on N(0, sigma)."""
-
+def init_method_normal(sigma, use_mup=False):
+    """
+    Init method based on N(0, sigma). 
+    If use_mup is True, `sigma` is scaled by the width multiplier (ratio of target to base model layer widths). Else, `sigma` is used as is (default behavior).
+    This rescaling is a reimplementation of `mup.init.normal_` method from the muP library.
+    """
     def init_(tensor):
-        return torch.nn.init.normal_(tensor, mean=0.0, std=sigma)
-
+        if use_mup:
+            assert hasattr(tensor, 'infshape'), 'Please call set_base_shapes(...) from the mup library to set the base shapes of the tensor.'
+            if tensor.infshape.ninf() <= 1: # std of vector-like tensors doesn't scale with width (columns 1,2 in Table 8 of muP paper) 
+                sigma_ = sigma
+            elif tensor.infshape.ninf() == 2: # std of matrix-like tensors scales with width as 1/sqrt(d) (column 3 in Table 8 of muP paper)
+                sigma_ = sigma * tensor.infshape.width_mult()**-0.5
+            else:
+                raise NotImplementedError(f'Only vector-like and matrix-like tensors are supported in muP. Received tensor with infshape {tensor.infshape.ninf()}.')
+        else:
+            sigma_ = sigma
+            
+        return torch.nn.init.normal_(tensor, mean=0.0, std=sigma_)
+    
     return init_
 
 

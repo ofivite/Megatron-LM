@@ -14,7 +14,6 @@ from .module import MegatronModule
 from .rotary_pos_embedding import apply_rotary_pos_emb, RotaryEmbedding
 from .transformer import ParallelTransformer
 from .utils import get_linear_layer
-from .utils import init_method_normal, scaled_init_method_normal
 
 
 def parallel_lm_logits(input_, word_embeddings_weight, parallel_output,
@@ -56,12 +55,6 @@ def get_language_model(config, num_tokentypes, add_pooler,
                        pre_process=True, post_process=True):
     """Build language model and return along with the key to save."""
     args = get_args()
-    if config.init_method is None:
-        config.init_method = init_method_normal(config.init_method_std)
-
-    if config.output_layer_init_method is None:
-        config.output_layer_init_method = scaled_init_method_normal(config.init_method_std,
-                                                                    config.num_layers)
 
     # Language model.
     language_model = TransformerLanguageModel(
@@ -417,6 +410,8 @@ class TransformerLanguageModel(MegatronModule):
         if self.post_process:
             # Pooler.
             if self.add_pooler:
+                if args.use_mup:
+                    raise NotImplementedError('Pooler initialisation is not yet adapted for muP.')
                 self.pooler = Pooler(self.hidden_size, self.init_method)
                 self._pooler_key = 'pooler'
 
