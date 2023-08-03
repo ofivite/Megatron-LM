@@ -57,6 +57,7 @@ class GPTModel(MegatronModule):
         self.post_process = post_process
         self.fp16_lm_cross_entropy = args.fp16_lm_cross_entropy
         self.untie_embeddings_and_output_weights = args.untie_embeddings_and_output_weights
+        self.use_mup = args.use_mup
 
         self.language_model, self._language_model_key = get_language_model(
             config=config,
@@ -89,13 +90,21 @@ class GPTModel(MegatronModule):
             inference_params=inference_params)
 
         if self.post_process:
-            return post_language_model_processing(
+            output_layer_weight = self.language_model.output_layer.weight if self.untie_embeddings_and_output_weights \
+                                                            else self.shared_embedding_or_output_weight()
+            lm_output = post_language_model_processing(
                 lm_output, labels,
-                self.language_model.output_layer.weight if self.untie_embeddings_and_output_weights else self.shared_embedding_or_output_weight(),
+                output_layer_weight,
                 self.parallel_output,
                 self.fp16_lm_cross_entropy)
-        else:
-            return lm_output
+            
+            # additionaly scale output logits by the d_model ratio (\tilde{d} in muP paper notations, see Appendix B.1) 
+            if self.use_mup:
+                assert hasattr(output_layer_weight, "infshape"), (
+                    "No infshape attribute found for the output layer. Please check that mup.set_base_shapes(...) was called.")
+                lm_output = lm_output / output_layer_weight.infshape.width_mult()
+                
+        return lm_output
 
     def state_dict_for_save_checkpoint(self, prefix='', keep_vars=False):
 
