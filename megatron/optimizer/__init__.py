@@ -9,6 +9,7 @@ from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
 from .optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
 
+from collections import defaultdict
 
 def get_param_groups(modules,
                      no_weight_decay_cond,
@@ -60,6 +61,111 @@ def get_param_groups(modules,
 
     return param_groups
 
+def add_mup_multipliers(param_groups, optimizer_type, decoupled_wd=False):
+    """
+    Reimplementation of MuAdam and MuSGD optimisers from the mup library (https://github.com/microsoft/mup/blob/main/mup/optim.py) 
+    
+    Adds to the param_groups the `mup_lr_mult` and `mup_wd_mult` multipliers which rescale learning rate and weight decay 
+        according to the model size scaling. The multipliers are to be applied in the step() function of OptimizerParamScheduler().
+    """
+    new_param_groups = []
+
+    if optimizer_type == 'adam':
+        for param_group in param_groups:
+
+            # new group template with a copy of everything except params
+            def new_group():
+                new_g = {k:v for k, v in param_group.items() if k != 'params'} 
+                new_g['params'] = []
+                return new_g
+            
+            # create separate groups for matrix- and vector-like params
+            matrix_like_p = defaultdict(new_group) # key is width_mult
+            vector_like_p = new_group()
+
+            # split params in the current group based on the infshape dimension 
+            for p in param_group['params']:
+                assert hasattr(p, 'infshape'), (
+                    f'A parameter with shape {p.shape} does not have `infshape` attribute. '
+                    'Did you forget to call `mup.set_base_shapes` on the model?')
+                if p.infshape.ninf() == 2:
+                    matrix_like_p[p.infshape.width_mult()]['params'].append(p)
+                elif p.infshape.ninf() > 2:
+                    raise NotImplementedError('more than 2 inf dimensions')
+                else:
+                    vector_like_p['params'].append(p)
+
+            # for matrix-like params, add LR multiplier 1/width_mult (Table 8, row 4 in the muP paper) 
+            # and WD multiplier if optimiser is not WD decoupled (see https://github.com/microsoft/mup/issues/1)
+            for width_mult, group in matrix_like_p.items():
+                group['mup_lr_mult'] = 1/width_mult
+                if not decoupled_wd: 
+                    group['mup_wd_mult'] = width_mult
+                else:
+                    group['mup_wd_mult'] = 1.0
+
+            # for vector-like and scalar params, no multipliers
+            vector_like_p['mup_lr_mult'] = 1.0
+            vector_like_p['mup_wd_mult'] = 1.0
+
+            # add to new param groups
+            new_param_groups.extend(list(matrix_like_p.values()) + [vector_like_p])
+
+    elif optimizer_type == 'sgd':
+        for param_group in param_groups:
+
+            # new group template with a copy of everything except params
+            def new_group():
+                new_g = {k:v for k, v in param_group.items() if k != 'params'} 
+                new_g['params'] = []
+                return new_g
+    
+            vector_like_p = defaultdict(new_group) # key is width mult
+            matrix_like_p = defaultdict(new_group) # key is fan_in/out ratio
+            fixed_p = new_group()
+
+            # split parameters based on the infshape dimension 
+            for p in param_group['params']:
+                assert hasattr(p, 'infshape'), (
+                    f'A parameter with shape {p.shape} does not have `infshape` attribute. '
+                    'Did you forget to call `mup.set_base_shapes` on the model?')
+                if p.infshape.ninf() == 1:
+                    vector_like_p[p.infshape.width_mult()]['params'].append(p)
+                elif p.infshape.ninf() == 2:
+                    matrix_like_p[p.infshape.fanin_fanout_mult_ratio()]['params'].append(p) # keep original implementation, according to the paper should always equal 1 
+                elif p.infshape.ninf() > 2:
+                    raise NotImplementedError('more than 2 inf dimensions')
+                else:
+                    fixed_p['params'].append(p)
+
+            # for vector-like params, add LR multiplier width_mult (Table 8, row 3 in the muP paper)
+            for width_mult, group in vector_like_p.items():
+                group['mup_lr_mult'] = width_mult
+                if not decoupled_wd:
+                    group['mup_wd_mult'] = 1/width_mult
+                else:
+                    group['mup_wd_mult'] = 1.0
+            
+            # for matrix-like params, add LR multiplier of 1/shape_ratio == 1 (Table 8, row 3 in the muP paper)
+            for shape_ratio, group in matrix_like_p.items():
+                assert shape_ratio == 1.0, 'fanin_fanout_mult_ratio() is not equal to 1'
+                group['mup_lr_mult'] = 1/shape_ratio
+                if not decoupled_wd:
+                    group['mup_wd_mult'] = shape_ratio
+                else:
+                    group['mup_wd_mult'] = 1.0
+            
+            # for scalar params, no multipliers
+            fixed_p['mup_lr_mult'] = 1.0
+            fixed_p['mup_wd_mult'] = 1.0
+
+            new_param_groups.extend(list(matrix_like_p.values()) + \
+                                    list(vector_like_p.values()) + [fixed_p])
+    else:
+        raise NotImplementedError(f'optimizer type {optimizer_type} not supported for muP')
+    
+    return new_param_groups
+
 def get_megatron_optimizer(model,
                            no_weight_decay_cond=None,
                            scale_lr_cond=None,
@@ -71,6 +177,11 @@ def get_megatron_optimizer(model,
                                     no_weight_decay_cond,
                                     scale_lr_cond,
                                     lr_mult)
+
+    if args.use_mup:
+        if args.optimizer == 'adam' and args.weight_decay != 0:
+            print('[NB] weight decay parameter is not transferable with muP for the Adam optimizer!')
+        param_groups = add_mup_multipliers(param_groups, args.optimizer)
 
     if args.optimizer == 'adam':
         optimizer = Adam(param_groups,

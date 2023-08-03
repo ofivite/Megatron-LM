@@ -764,7 +764,8 @@ def _add_training_args(parser):
                        '2) block: the number of individual Transformer layers '
                        'to recompute within each pipeline stage.')
     group.add_argument('--use-mup', type=bool, default=False,
-                       help='Whether to enable mu parametrisation of the model.')
+                       help='Whether to enable mu parametrisation of the model'
+                       'with the corresponding rescaling w.r.t the base model.')
 
     # deprecated
     group.add_argument('--checkpoint-activations', action='store_true',
