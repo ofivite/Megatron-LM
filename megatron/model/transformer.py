@@ -227,7 +227,10 @@ class CoreAttention(MegatronModule):
             config.num_attention_heads, world_size)
 
         coeff = None
-        self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
+        if config.use_mup_norm_factor:
+            self.norm_factor = self.hidden_size_per_attention_head
+        else:
+            self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
         if self.apply_query_key_layer_scaling:
             coeff = self.layer_number
             self.norm_factor *= coeff
