@@ -21,6 +21,7 @@ class PositionEmbeddingType(enum.Enum):
     learned_absolute = 1
     rope = 3
     alibi = 2
+    nope = 4
 
 # For backward compatibility with old model checkpoints
 from megatron.core.enums import ModelType
