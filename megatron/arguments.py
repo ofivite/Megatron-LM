@@ -578,7 +578,7 @@ def _add_network_size_args(parser):
     group.add_argument('--position-embedding-type',
                        type=lambda x: PositionEmbeddingType[x],
                        choices=list(PositionEmbeddingType),
-                       default=PositionEmbeddingType.none,
+                       default=PositionEmbeddingType.learned_absolute,
                        help='Position embedding type.')
     group.add_argument('--use-rotary-position-embeddings', action='store_true',
                        help='Use rotary positional embeddings or not. '
