@@ -1,14 +1,14 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 
 from contextlib import nullcontext
+
 import torch
 
 from megatron.core import parallel_state, tensor_parallel
-
+from megatron.core.fusions.fused_layer_norm import FusedLayerNorm
+from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
-from megatron.core.transformer.enums import AttnMaskType
-from megatron.core.fusions.fused_layer_norm import FusedLayerNorm
 from megatron.core.transformer.transformer_layer import TransformerLayer
 from megatron.core.utils import make_viewless_tensor
 
@@ -55,7 +55,9 @@ class TransformerBlock(MegatronModule):
         #     self.norm_factor *= coeff
         def build_layer(layer_number):
             return TransformerLayer(
-                config=self.config, layer_number=layer_number, self_attn_mask_type=self.self_attn_mask_type,
+                config=self.config,
+                layer_number=layer_number,
+                self_attn_mask_type=self.self_attn_mask_type,
             )
 
         pipeline_rank = parallel_state.get_pipeline_model_parallel_rank()
@@ -123,7 +125,7 @@ class TransformerBlock(MegatronModule):
     def _get_layer(self, layer_number):
         return self.layers[layer_number]
 
-    def _checkpointed_forward(self, hidden_states, attention_mask):
+    def _checkpointed_forward(self, hidden_states, attention_mask, rotary_pos_emb):
         """Forward method with activation checkpointing."""
 
         def custom(start, end):
@@ -147,6 +149,7 @@ class TransformerBlock(MegatronModule):
                     self.config.distribute_saved_activations,
                     hidden_states,
                     attention_mask,
+                    rotary_pos_emb,
                 )
 
                 l += self.recompute_num_layers
@@ -158,10 +161,14 @@ class TransformerBlock(MegatronModule):
             for l in range(self.num_layers_per_pipeline_rank):
                 if l < self.config.recompute_num_layers:
                     hidden_states = tensor_parallel.checkpoint(
-                        custom(l, l + 1), self.config.distribute_saved_activations, hidden_states, attention_mask,
+                        custom(l, l + 1),
+                        self.config.distribute_saved_activations,
+                        hidden_states,
+                        attention_mask,
+                        rotary_pos_emb,
                     )
                 else:
-                    hidden_states = custom(l, l + 1)(hidden_states, attention_mask)
+                    hidden_states = custom(l, l + 1)(hidden_states, attention_mask, rotary_pos_emb)
         else:
             raise ValueError("Invalid activation recompute method.")
 
@@ -177,7 +184,7 @@ class TransformerBlock(MegatronModule):
         forward_step_func"""
         self.input_tensor = input_tensor
 
-    def forward(self, hidden_states, attention_mask, inference_params=None):
+    def forward(self, hidden_states, attention_mask, inference_params=None, rotary_pos_emb=None):
         # hidden_states (float): [s, b, h]
         # attention_mask (bool): [1, 1, s, s]
 
@@ -200,20 +207,49 @@ class TransformerBlock(MegatronModule):
         #   likely redundant, since p2p_communication.py (likely originator)
         #   already creates viewless tensors. That said, make_viewless_tensor()
         #   is called here to be future-proof and corner-case-proof.
-        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True,)
+        hidden_states = make_viewless_tensor(
+            inp=hidden_states, requires_grad=True, keep_graph=True,
+        )
 
         if self.config.sequence_parallel:
             rng_context = tensor_parallel.get_cuda_rng_tracker().fork()
         else:
             rng_context = nullcontext()
 
-        with rng_context:
+        if self.config.fp8:
+            import transformer_engine  # To keep out TE dependency when not training in fp8
+
+            fp8_recipe = transformer_engine.common.recipe.DelayedScaling(
+                margin=self.config.fp8_margin,
+                interval=self.config.fp8_interval,
+                fp8_format=transformer_engine.common.recipe.Format.E4M3
+                if self.config.fp8_e4m3
+                else transformer_engine.common.recipe.Format.HYBRID,
+                amax_compute_algo=self.config.fp8_amax_compute_algo,
+                amax_history_len=self.config.fp8_amax_history_len,
+            )
+            fp8_context = transformer_engine.pytorch.fp8_autocast(
+                enabled=True, fp8_recipe=fp8_recipe
+            )
+        else:
+            fp8_context = nullcontext()
+
+        with rng_context and fp8_context:
             # Forward pass.
             if self.config.recompute_granularity == 'full':
-                hidden_states = self._checkpointed_forward(hidden_states=hidden_states, attention_mask=attention_mask)
+                hidden_states = self._checkpointed_forward(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    rotary_pos_emb=rotary_pos_emb,
+                )
             else:
                 for layer in self.layers:
-                    hidden_states = layer(hidden_states=hidden_states, attention_mask=attention_mask)
+                    hidden_states = layer(
+                        hidden_states=hidden_states,
+                        attention_mask=attention_mask,
+                        rotary_pos_emb=rotary_pos_emb,
+                        inference_params=inference_params,
+                    )
 
         # Final layer norm.
         if self.post_process and self.post_layer_norm:
