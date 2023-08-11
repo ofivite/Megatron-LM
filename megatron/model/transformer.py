@@ -95,7 +95,7 @@ class ParallelMLP(MegatronModule):
             config.hidden_size,
             ffn_hidden_size,
             config=config,
-            init_method=config.init_method,
+            init_method=config.hidden_init_method,
             bias=self.add_bias,
             gather_output=False,
             skip_bias_add=True,
@@ -127,7 +127,7 @@ class ParallelMLP(MegatronModule):
             config.ffn_hidden_size,
             config.hidden_size,
             config=config,
-            init_method=config.output_layer_init_method,
+            init_method=config.hidden_init_method,
             bias=self.add_bias,
             input_is_parallel=True
         )
@@ -462,7 +462,7 @@ class ParallelAttention(MegatronModule):
                 config.hidden_size,
                 3 * projection_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=args.add_bias_linear,
                 gather_output=False)
         else:
@@ -471,7 +471,7 @@ class ParallelAttention(MegatronModule):
                 config.hidden_size,
                 projection_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=config.add_bias_linear,
                 gather_output=False)
 
@@ -480,7 +480,7 @@ class ParallelAttention(MegatronModule):
                 config.hidden_size,
                 2 * projection_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=config.add_bias_linear,
                 gather_output=False)
 
@@ -498,7 +498,7 @@ class ParallelAttention(MegatronModule):
             projection_size,
             config.hidden_size,
             config=config,
-            init_method=config.output_layer_init_method,
+            init_method=config.hidden_init_method,
             bias=args.add_bias_linear,
             input_is_parallel=True,
             skip_bias_add=True)

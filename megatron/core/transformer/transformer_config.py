@@ -41,21 +41,20 @@ class TransformerConfig(ModelParallelConfig):
         activation_func (Callable): Activation function to use for the non-linearity in the MLP. Defaults to F.gelu.
 
         # initialization
-        init_method (Callable): Method to initialize weights. Note that bias is always set to
+        input_init_method (Callable): Method to initialize weights of input word embeddings. Note that bias is always set to
                                 zero. Should be a function that takes a single Tensor and
-                                initializes it. Defaults to
-                                megatron.core.utils.init_method_normal(init_method_std) which is
-                                torch.nn.init.normal_ with mean=0.0 and std=init_method_Std.
+                                initializes it. Defaults to None.
+        
+        hidden_init_method (Callable): Method to initialize hidden weights in MLP blocks and Attention heads. Note that bias is always set to
+                                zero. Should be a function that takes a single Tensor and
+                                initializes it. Defaults to None.
 
-        output_layer_init_method (Callable): Method to initialize weights of the output layer of
-                                             both attention and MLP blocks. Defaults to
-                                             megatron.core.utils.scaled_init_method_normal(init_method_std)
-                                             which is torch.nn.init.normal_ with mean=0.0 and
-                                             std=init_method_std / math.sqrt(2.0 * num_layers).
+        output_init_method (Callable): Method to initialize weights of the output unembedding layer. Note that bias is always set to
+                                zero. Should be a function that takes a single Tensor and
+                                initializes it. Defaults to None.
 
-        init_method_std (float): Standard deviation of the zero mean normal for the default
-                                 initialization method, not used if init_method and
-                                 output_layer_init_method are provided. Defaults to 0.02.
+        init_method_std (float): Standard deviation of the zero mean normal for the provided
+                                 initialization methods. Defaults to 0.02.
 
         # mixed-precision
         apply_query_key_layer_scaling (bool): If true, scale Q * K^T by 1 / layer-number. Defaults to True.
@@ -113,10 +112,12 @@ class TransformerConfig(ModelParallelConfig):
     add_bias_linear: bool = True
     gated_linear_unit: bool = False
     activation_func: Callable = F.gelu
+    use_mup_norm_factor: bool = False
 
     # initialization
-    init_method: Callable = None
-    output_layer_init_method: Callable = None
+    input_init_method: Callable = None
+    hidden_init_method: Callable = None
+    output_init_method: Callable = None
     init_method_std: float = 0.02
 
     # mixed-precision

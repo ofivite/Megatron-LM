@@ -420,16 +420,21 @@ def core_transformer_config_from_args(args):
     
     # weight initialization
     if args.init_method_type == 'normal':
-        kw_args['init_method'] = init_method_normal(args.init_method_std, args.use_mup)
+        # in muP case, constant with width scaling (columns 1,2 in Table 8 of muP paper)
+        kw_args['input_init_method'] = init_method_normal(args.init_method_std) 
+        kw_args['output_init_method'] = init_method_normal(args.init_method_std) 
         if args.use_mup:
-            kw_args['output_layer_init_method'] = init_method_normal(args.init_method_std, args.use_mup)
+            # scaling with width as 1/sqrt(d) (column 3 in Table 8 of muP paper)
+            kw_args['hidden_init_method'] = init_method_normal(args.init_method_std \
+                                                                    / args.hidden_size**0.5)
         else:
-            kw_args['output_layer_init_method'] = scaled_init_method_normal(args.init_method_std, args.num_layers)
+            kw_args['hidden_init_method'] = init_method_normal(args.init_method_std)
     elif args.init_method_type == 'xavier_uniform':
         if args.use_mup:
             raise NotImplementedError("Xavier uniform init is not yet supported together with muP.")
-        kw_args['init_method'] = torch.nn.init.xavier_uniform_
-        kw_args['output_layer_init_method'] = torch.nn.init.xavier_uniform_
+        kw_args['input_init_method'] = torch.nn.init.xavier_uniform_
+        kw_args['hidden_init_method'] = torch.nn.init.xavier_uniform_
+        kw_args['output_init_method'] = torch.nn.init.xavier_uniform_
     else:
         raise ValueError(f"Unknown init_method_type: {args.init_method_type}")
 
@@ -763,7 +768,7 @@ def _add_training_args(parser):
                        'uniformly divided recompute unit, '
                        '2) block: the number of individual Transformer layers '
                        'to recompute within each pipeline stage.')
-    group.add_argument('--use-mup', type=bool, default=False,
+    group.add_argument('--use-mup', action='store_true',
                        help='Whether to enable mu parametrisation of the model'
                        'with the corresponding rescaling w.r.t the base model.')
 

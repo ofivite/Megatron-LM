@@ -139,7 +139,7 @@ class Embedding(MegatronModule):
         super(Embedding, self).__init__()
 
         self.hidden_size = hidden_size
-        self.init_method = config.init_method
+        self.init_method = config.input_init_method
         self.num_tokentypes = num_tokentypes
 
         args = get_args()
@@ -148,7 +148,7 @@ class Embedding(MegatronModule):
         self.embedding_weights_in_fp32 = embedding_weights_in_fp32
         self.params_dtype = args.params_dtype
         self.word_embeddings = tensor_parallel.VocabParallelEmbedding(
-            vocab_size, self.hidden_size, config=config, init_method=config.init_method)
+            vocab_size, self.hidden_size, config=config, init_method=self.init_method)
         self._word_embeddings_key = 'word_embeddings'
 
         # Position embedding (serial).
@@ -342,7 +342,6 @@ class TransformerLanguageModel(MegatronModule):
         self.post_process = post_process
         self.hidden_size = config.hidden_size
         self.num_tokentypes = num_tokentypes
-        self.init_method = config.init_method
         self.add_encoder = add_encoder
         self.encoder_attn_mask_type = encoder_attn_mask_type
         self.add_decoder = add_decoder
@@ -412,7 +411,7 @@ class TransformerLanguageModel(MegatronModule):
             if self.add_pooler:
                 if args.use_mup:
                     raise NotImplementedError('Pooler initialisation is not yet adapted for muP.')
-                self.pooler = Pooler(self.hidden_size, self.init_method)
+                self.pooler = Pooler(self.hidden_size, config.output_init_method)
                 self._pooler_key = 'pooler'
 
             if self.untie_embeddings_and_output_weights:
@@ -420,7 +419,7 @@ class TransformerLanguageModel(MegatronModule):
                     args.hidden_size,
                     args.padded_vocab_size,
                     config=config,
-                    init_method=self.init_method,
+                    init_method=config.output_init_method,
                     bias=False) # Setting bias to False always to keep it consistent with embedding tying that also does not have a bias.
                 self._output_layer_key = 'output_layer'
 
