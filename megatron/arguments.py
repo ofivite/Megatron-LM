@@ -771,6 +771,10 @@ def _add_training_args(parser):
     group.add_argument('--use-mup', action='store_true',
                        help='Whether to enable mu parametrisation of the model'
                        'with the corresponding rescaling w.r.t the base model.')
+    group.add_argument('--save-mup-base-shapes-to', type=str, default='',
+                        help='file location to save mup base shapes at')
+    group.add_argument('--set-mup-base-shapes-from', type=str, default='',
+                        help='file location to load mup base shapes from')
 
     # deprecated
     group.add_argument('--checkpoint-activations', action='store_true',

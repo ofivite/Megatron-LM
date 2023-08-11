@@ -378,9 +378,31 @@ def setup_model_and_optimizer(model_provider_func,
     """Setup model and optimizer."""
     args = get_args()
 
+    # save base shapes
+    if args.use_mup:
+        from megatron.utils import save_base_shapes
+
+        assert len(args.save_mup_base_shapes_to) > 0 or len(args.set_mup_base_shapes_from) > 0, \
+            "Please specify either --save-mup-base-shapes-to (for computing and saving base model shapes to a given file) \
+                or --set-mup-base-shapes-from (for setting base model shapes from a given file)"
+        
+        if args.save_mup_base_shapes_to:
+            base_shapes_filename = f"{args.save_mup_base_shapes_to}/shape.rank-{torch.distributed.get_rank()}"
+            save_base_shapes(base_shapes_filename)
+            sys.exit(1)
+    
+    # instantiate model
     model = get_model(model_provider_func, model_type)
     unwrapped_model = unwrap_model(model,
                                    (torchDDP, LocalDDP, Float16Module))
+    
+    # set base shapes
+    if args.use_mup and args.set_mup_base_shapes_from:
+        from mup import set_base_shapes
+        base_shapes_filename = f"{args.set_mup_base_shapes_from}/shape.rank-{torch.distributed.get_rank()}"
+        assert len(model) == 1, "For setting mup shapes, expect `model` to be a list of length 1"
+        set_base_shapes(model[0], base_shapes_filename, rescale_params=False)
+    
 
     optimizer = get_megatron_optimizer(model, no_wd_decay_cond,
                                        scale_lr_cond, lr_mult)
