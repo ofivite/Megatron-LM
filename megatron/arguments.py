@@ -15,7 +15,6 @@ from megatron.model.enums import PositionEmbeddingType
 from tools.retro.utils import get_args_path as get_retro_args_path
 
 from megatron.core.transformer import TransformerConfig
-from megatron.core.utils import init_method_normal, scaled_init_method_normal
 
 def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     """Parse all arguments."""
@@ -417,29 +416,6 @@ def core_transformer_config_from_args(args):
         kw_args['activation_func'] = F.silu
         kw_args['gated_linear_unit'] = True
         kw_args['bias_gelu_fusion'] = False
-    
-    # weight initialization
-    if args.init_method_type == 'normal':
-        # in muP case, constant with width scaling (columns 1,2 in Table 8 of muP paper)
-        kw_args['input_init_method'] = init_method_normal(args.init_method_std) 
-        kw_args['output_init_method'] = init_method_normal(args.init_method_std) 
-        if args.use_mup:
-            # scaling with width as 1/sqrt(d) (column 3 in Table 8 of muP paper)
-            kw_args['hidden_init_method'] = init_method_normal(args.init_method_std \
-                                                                    / args.hidden_size**0.5)
-        else:
-            kw_args['hidden_init_method'] = init_method_normal(args.init_method_std)
-    elif args.init_method_type == 'xavier_uniform':
-        if args.use_mup:
-            raise NotImplementedError("Xavier uniform init is not yet supported together with muP.")
-        kw_args['input_init_method'] = torch.nn.init.xavier_uniform_
-        kw_args['hidden_init_method'] = torch.nn.init.xavier_uniform_
-        kw_args['output_init_method'] = torch.nn.init.xavier_uniform_
-    else:
-        raise ValueError(f"Unknown init_method_type: {args.init_method_type}")
-
-    # whether to scale self-attention scores by 1/d_model instead of 1/sqrt(d_model)
-    kw_args['use_mup_norm_factor'] = True if args.use_mup else False 
 
     return TransformerConfig(**kw_args)
 

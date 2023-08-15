@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from megatron.core import ModelParallelConfig
+from megatron.core.utils import init_method_normal, scaled_init_method_normal
 
 @dataclass
 class TransformerConfig(ModelParallelConfig):
@@ -115,6 +116,9 @@ class TransformerConfig(ModelParallelConfig):
     use_mup_norm_factor: bool = False
 
     # initialization
+    use_mup: bool = False
+    init_method_type: str = 'normal'
+    perform_initialization: bool = True
     input_init_method: Callable = None
     hidden_init_method: Callable = None
     output_init_method: Callable = None
@@ -150,6 +154,7 @@ class TransformerConfig(ModelParallelConfig):
             self.ffn_hidden_size = 4 * self.hidden_size
 
         if self.kv_channels is None:
+            assert self.hidden_size % self.num_attention_heads == 0
             self.kv_channels = self.hidden_size // self.num_attention_heads
 
         if self.apply_query_key_layer_scaling:
@@ -195,3 +200,27 @@ class TransformerConfig(ModelParallelConfig):
 
             if self.activation_func != F.gelu:
                 raise ValueError(f'When bias_gelu_fusion is True, activation_func must be F.gelu.')
+        
+        # weight initialization
+        if self.init_method_type == 'normal':
+            # in muP case, constant with width scaling (columns 1,2 in Table 8 of muP paper)
+            self.input_init_method = init_method_normal(self.init_method_std) 
+            self.output_init_method = init_method_normal(self.init_method_std) 
+            if self.use_mup:
+                assert self.perform_initialization, "muP requires perform_initialization=True"
+                # scaling with width as 1/sqrt(d) (column 3 in Table 8 of muP paper)
+                self.hidden_init_method = init_method_normal(self.init_method_std \
+                                                                        / self.hidden_size**0.5)
+            else:
+                self.hidden_init_method = init_method_normal(self.init_method_std)
+        elif self.init_method_type == 'xavier_uniform':
+            if self.use_mup:
+                raise NotImplementedError("Xavier uniform init is not yet supported together with muP.")
+            self.input_init_method = torch.nn.init.xavier_uniform_
+            self.hidden_init_method = torch.nn.init.xavier_uniform_
+            self.output_init_method = torch.nn.init.xavier_uniform_
+        else:
+            raise ValueError(f"Unknown init_method_type: {self.init_method_type}")
+
+        # whether to scale self-attention scores by 1/d_model instead of 1/sqrt(d_model)
+        self.use_mup_norm_factor = True if self.use_mup else False 

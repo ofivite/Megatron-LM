@@ -218,7 +218,9 @@ def save_base_shapes(base_shapes_filename):
     from megatron.model import GPTModel
     from megatron.arguments import core_transformer_config_from_args
     from megatron.training import get_model
-    from mup import get_shapes, make_base_shapes
+
+    # take ModelType from pretrain_gpt.py
+    model_type = ModelType.encoder_or_decoder
 
     # get base model shape
     # base_model is instantiated as in pretrain_gpt.py
@@ -231,7 +233,7 @@ def save_base_shapes(base_shapes_filename):
         pre_process=pre_process,
         post_process=post_process
     )
-    base_model = get_model(base_model, ModelType.encoder_or_decoder)
+    base_model = get_model(base_model, model_type)
     assert len(base_model) == 1, 'For saving muP shapes, base_model is expected to be a list of length 1'
     base_shapes = get_shapes(base_model[0])
     del base_model
@@ -241,15 +243,12 @@ def save_base_shapes(base_shapes_filename):
     delta_args = get_args()
     delta_scaling_factor = 2
 
-    # scale hidden_dim
-    # the other width dimensions are derived from it in case of None 
+    # scale width dimensions
+    # setting `ffn_hidden_size` and `kv_channels` to None will trigger their derivation in __post_init__() of `TransformerConfig` 
+    # NB: make sure that latter is consistent with the duplicated definition in `arguments.py`
     delta_args.hidden_size *= delta_scaling_factor
-
-    # if not None, scale width dimensions manually
-    if delta_args.ffn_hidden_size is not None:
-        delta_args.ffn_hidden_size *= delta_scaling_factor
-    if delta_args.kv_channels is not None:
-        delta_args.kv_channels *= delta_scaling_factor
+    delta_args.ffn_hidden_size = None 
+    delta_args.kv_channels = None 
 
     delta_config = core_transformer_config_from_args(delta_args)
     delta_model = lambda pre_process=True, post_process=True: GPTModel(
@@ -259,9 +258,11 @@ def save_base_shapes(base_shapes_filename):
         pre_process=pre_process,
         post_process=post_process
     )
-    delta_model = get_model(delta_model, ModelType.encoder_or_decoder)
+    delta_model = get_model(delta_model, model_type)
     assert len(delta_model) == 1, 'For saving muP shapes, delta_model should be a list of length 1'
     delta_shapes = get_shapes(delta_model[0])
     del delta_model
 
+    # derive and save infshapes and its dimensionalitites from base_shapes and delta_shapes
     make_base_shapes(base_shapes, delta_shapes, savefile=f'{base_shapes_filename}')
+    print('Saved base shapes to', base_shapes_filename)
