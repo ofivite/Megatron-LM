@@ -108,6 +108,7 @@ def pretrain(train_valid_test_dataset_provider,
     timers = get_timers()
 
     # Model, optimizer, and learning rate.
+    # In case of muP check, models are initiliazed in the `mup_coord_check()` function
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
         model_provider, model_type)
@@ -141,6 +142,19 @@ def pretrain(train_valid_test_dataset_provider,
     print_rank_0('done with setup ...')
     timers.log(['model-and-optimizer-setup',
                 'train/valid/test-data-iterators-setup'], barrier=True)
+
+    # Validate muP parametrisation
+    if args.perform_mup_coord_check:
+        from megatron.utils import mup_coord_check
+
+        # will perform coordinate check for models with given hidden dimensions
+        width_dimensions = [256, 512, 1024, 2048]
+        mup_coord_check(width_dimensions, train_data_iterator, 
+                        nsteps=args.mup_coord_check_nsteps, 
+                        nseeds=args.mup_coord_check_nseeds,
+                        save_dir=args.save_mup_coord_check_to)
+        print_rank_0("Saved coord check plots... exiting")
+        sys.exit(1)
 
     if not args.skip_train:
         print_rank_0('training ...')

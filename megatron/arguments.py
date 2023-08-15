@@ -748,9 +748,17 @@ def _add_training_args(parser):
                        help='Whether to enable mu parametrisation of the model'
                        'with the corresponding rescaling w.r.t the base model.')
     group.add_argument('--save-mup-base-shapes-to', type=str, default='',
-                        help='file location to save mup base shapes at')
+                        help='directory location to save mup base shapes at')
     group.add_argument('--set-mup-base-shapes-from', type=str, default='',
-                        help='file location to load mup base shapes from')
+                        help='directory location to load mup base shapes from')
+    group.add_argument('--perform-mup-coord-check', action='store_true',
+                        help='test μ parametrization is correctly implemented by collecting statistics on coordinate distributions for a few steps of training.')
+    group.add_argument('--mup-coord-check-nsteps', type=int, default=3,
+                        help='Do coord check with this many steps.')
+    group.add_argument('--mup-coord-check-nseeds', type=int, default=3,
+                        help='number of torch.manual_seed for testing correctness of μ parametrization')
+    group.add_argument('--save-mup-coord-check-to', type=str, default='',
+                        help='directory location to save muP coordinate check plots at')
 
     # deprecated
     group.add_argument('--checkpoint-activations', action='store_true',
