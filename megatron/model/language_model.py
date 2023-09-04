@@ -52,7 +52,8 @@ def get_language_model(config, num_tokentypes, add_pooler,
                        add_encoder=True,
                        add_decoder=False,
                        decoder_attn_mask_type=AttnMaskType.causal,
-                       pre_process=True, post_process=True):
+                       pre_process=True, post_process=True, 
+                       parallel_output=True):
     """Build language model and return along with the key to save."""
     args = get_args()
 
@@ -66,7 +67,8 @@ def get_language_model(config, num_tokentypes, add_pooler,
         decoder_attn_mask_type=decoder_attn_mask_type,
         add_pooler=add_pooler,
         pre_process=pre_process,
-        post_process=post_process
+        post_process=post_process,
+        parallel_output=parallel_output
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -310,6 +312,35 @@ class Embedding(MegatronModule):
                       'checkpoint but could not find it', flush=True)
 
 
+class OutputLogits(MegatronModule):
+
+    def __init__(self, logit_weights, use_mup, parallel_output, width_mult=None):
+        super(OutputLogits, self).__init__()
+        self.logit_weights = logit_weights
+        self.use_mup = use_mup
+        self.parallel_output = parallel_output
+        self.width_mult = width_mult
+        
+    def forward(self, lm_output):
+
+        # Output. Format [s b h]
+        output = parallel_lm_logits(
+            lm_output,
+            self.logit_weights,
+            self.parallel_output)
+        
+        if self.width_mult is not None:
+            output = output / self.width_mult
+        elif self.use_mup: # additionaly scale output logits by the d_model ratio (\tilde{d} in muP paper notations, see Appendix B.1) 
+            assert hasattr(self.logit_weights, "infshape"), (
+                "No infshape attribute found for the output layer. Please check that mup.set_base_shapes(...) was called.")
+            output = output / self.logit_weights.infshape.width_mult()
+        # else:
+        #     raise NotImplementedError('muP is not yet implemented for non-muP models.')
+
+        return output
+    
+
 class TransformerLanguageModel(MegatronModule):
     """Transformer language model.
 
@@ -332,11 +363,12 @@ class TransformerLanguageModel(MegatronModule):
                  decoder_attn_mask_type=AttnMaskType.causal,
                  add_pooler=False,
                  pre_process=True,
-                 post_process=True):
+                 post_process=True,
+                 parallel_output=True):
         args = get_args()
         # TODO: passing share_embeddings_and_output_weights=False will not work correctly for T5 and embeddings will not be synced. Fix later for T5.
         if args.untie_embeddings_and_output_weights: assert not add_decoder
-        super(TransformerLanguageModel, self).__init__(share_embeddings_and_output_weights=not args.untie_embeddings_and_output_weights)
+        super(TransformerLanguageModel, self).__init__(config=config, share_embeddings_and_output_weights=not args.untie_embeddings_and_output_weights)
 
         self.pre_process = pre_process
         self.post_process = post_process
@@ -362,12 +394,15 @@ class TransformerLanguageModel(MegatronModule):
                                        args.embedding_weights_in_fp32)
             self._embedding_key = 'embedding'
 
+        if not self.untie_embeddings_and_output_weights:
+            self.initialize_word_embeddings()
+
         # Rotary positional embeddings
         self.position_embedding_type = args.position_embedding_type
         if args.position_embedding_type is PositionEmbeddingType.rotary:
             self.seq_length = args.seq_length
-            rotary_dim = args.hidden_size // args.num_attention_heads \
-                if args.kv_channels is None else args.kv_channels
+            rotary_dim = self.hidden_size // config.num_attention_heads \
+                if config.kv_channels is None else config.kv_channels
 
             if args.rotary_percent < 1.0:
                 rotary_dim = int(rotary_dim * args.rotary_percent)
@@ -409,19 +444,24 @@ class TransformerLanguageModel(MegatronModule):
         if self.post_process:
             # Pooler.
             if self.add_pooler:
-                if args.use_mup:
+                if config.use_mup:
                     raise NotImplementedError('Pooler initialisation is not yet adapted for muP.')
                 self.pooler = Pooler(self.hidden_size, config.output_init_method)
                 self._pooler_key = 'pooler'
 
             if self.untie_embeddings_and_output_weights:
                 self.output_layer = tensor_parallel.ColumnParallelLinear(
-                    args.hidden_size,
+                    config.hidden_size,
                     args.padded_vocab_size,
                     config=config,
                     init_method=config.output_init_method,
                     bias=False) # Setting bias to False always to keep it consistent with embedding tying that also does not have a bias.
                 self._output_layer_key = 'output_layer'
+
+            output_layer_weight = self.output_layer.weight if self.untie_embeddings_and_output_weights \
+                                                            else self.shared_embedding_or_output_weight()
+            self.output_logits = OutputLogits(output_layer_weight, config.use_mup, parallel_output=parallel_output, width_mult=width_mult)
+            self._output_logits_key = 'output_logits'
 
     def set_input_tensor(self, input_tensor):
         """ See megatron.model.transformer.set_input_tensor()"""
@@ -504,6 +544,7 @@ class TransformerLanguageModel(MegatronModule):
             if self.add_pooler:
                 pooled_output = self.pooler(encoder_output,
                                             pooling_sequence_index)
+            encoder_output = self.output_logits(encoder_output)
 
         # output_enc_hidden refers to when we just need the encoder's
         # output. For example, it is helpful to compute
@@ -529,6 +570,9 @@ class TransformerLanguageModel(MegatronModule):
             enc_dec_attn_mask=enc_dec_attn_mask,
             inference_params=inference_params,
             rotary_pos_emb=rotary_pos_emb)
+        
+        if self.post_process:
+            decoder_output = self.output_logits(decoder_output)
 
         if self.add_pooler and self.post_process:
             return decoder_output, encoder_output, pooled_output
@@ -555,12 +599,20 @@ class TransformerLanguageModel(MegatronModule):
             if self.untie_embeddings_and_output_weights:
                 state_dict_[self._output_layer_key] \
                     = self.output_layer.state_dict(prefix=prefix, keep_vars=keep_vars)
+        
+            state_dict_[self._output_logits_key] \
+                = self.output_logits.state_dict_for_save_checkpoint(prefix=prefix, keep_vars=keep_vars)                
 
         if self.add_decoder:
             state_dict_[self._decoder_key] \
                 = self.decoder.state_dict_for_save_checkpoint(prefix=prefix,
                                                               keep_vars=keep_vars)
 
+        if self.post_process and not self.pre_process and not self.untie_embeddings_and_output_weights:
+            state_dict_[self._word_embeddings_for_head_key] \
+                = self.word_embeddings.state_dict(prefix=prefix,
+                                                  keep_vars=keep_vars)
+            
         return state_dict_
 
     def load_state_dict(self, state_dict, strict=True):
@@ -578,6 +630,11 @@ class TransformerLanguageModel(MegatronModule):
                         state_dict_[key] = state_dict[key]
             self.embedding.load_state_dict(state_dict_, strict=strict)
 
+        # Load word_embeddings.
+        if self.post_process and not self.pre_process and not self.untie_embeddings_and_output_weights:
+            self.word_embeddings.load_state_dict(
+                state_dict[self._word_embeddings_for_head_key], strict=strict)
+            
         # Encoder.
         if self.add_encoder:
             if self._encoder_key in state_dict:
@@ -622,3 +679,9 @@ class TransformerLanguageModel(MegatronModule):
                 'could not find data for pooler in the checkpoint'
             self.decoder.load_state_dict(state_dict[self._decoder_key],
                                          strict=strict)
+
+        if self.post_process:
+            assert 'output_logits' in state_dict, \
+                        'could not find data for output logits in the checkpoint'
+            self.output_logits.load_state_dict(state_dict[self._output_logits_key],
+                                        strict=strict)

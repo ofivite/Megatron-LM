@@ -169,7 +169,8 @@ def add_mup_multipliers(param_groups, optimizer_type, decoupled_wd=False):
 def get_megatron_optimizer(model,
                            no_weight_decay_cond=None,
                            scale_lr_cond=None,
-                           lr_mult=1.0):
+                           lr_mult=1.0,
+                           use_mup=False):
     args = get_args()
 
     # Base optimizer.
@@ -178,7 +179,7 @@ def get_megatron_optimizer(model,
                                     scale_lr_cond,
                                     lr_mult)
 
-    if args.use_mup:
+    if use_mup:
         if args.optimizer == 'adam' and args.weight_decay != 0:
             print('[NB] weight decay parameter is not transferable with muP for the Adam optimizer! \
                     If FusedAdam with the default configuration is used, it corresponds to AdamW which is muP-supported.')

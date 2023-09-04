@@ -111,7 +111,7 @@ def pretrain(train_valid_test_dataset_provider,
     # In case of muP check, models are initiliazed in the `mup_coord_check()` function
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
-        model_provider, model_type)
+        model_provider, model_type, use_mup=args.use_mup)
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
@@ -148,7 +148,7 @@ def pretrain(train_valid_test_dataset_provider,
         from megatron.utils import mup_coord_check
 
         # will perform coordinate check for models with given hidden dimensions
-        width_dimensions = [256, 512, 1024, 2048]
+        width_dimensions = [512, 1024, 2048, 4096]
         mup_coord_check(width_dimensions, train_data_iterator, 
                         nsteps=args.mup_coord_check_nsteps, 
                         nseeds=args.mup_coord_check_nseeds,
@@ -333,7 +333,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     return model
 
 
-def get_optimizer_param_scheduler(optimizer):
+def get_optimizer_param_scheduler(optimizer, use_mup=False):
     """Build the learning rate scheduler."""
     args = get_args()
 
@@ -379,7 +379,7 @@ def get_optimizer_param_scheduler(optimizer):
         wd_incr_style=args.weight_decay_incr_style,
         use_checkpoint_opt_param_scheduler=args.use_checkpoint_opt_param_scheduler,
         override_opt_param_scheduler=args.override_opt_param_scheduler,
-        use_mup=args.use_mup)
+        use_mup=use_mup)
 
     return opt_param_scheduler
 
@@ -388,12 +388,13 @@ def setup_model_and_optimizer(model_provider_func,
                               model_type,
                               no_wd_decay_cond=None,
                               scale_lr_cond=None,
-                              lr_mult=1.0):
+                              lr_mult=1.0,
+                              use_mup=False):
     """Setup model and optimizer."""
     args = get_args()
 
     # save base shapes
-    if args.use_mup:
+    if use_mup:
         from megatron.utils import save_base_shapes
 
         assert len(args.save_mup_base_shapes_to) > 0 or len(args.set_mup_base_shapes_from) > 0, \
@@ -411,7 +412,7 @@ def setup_model_and_optimizer(model_provider_func,
                                    (torchDDP, LocalDDP, Float16Module))
     
     # set base shapes
-    if args.use_mup and args.set_mup_base_shapes_from:
+    if use_mup and args.set_mup_base_shapes_from:
         from mup import set_base_shapes
         base_shapes_filename = f"{args.set_mup_base_shapes_from}/shape.rank-{torch.distributed.get_rank()}"
         assert len(model) == 1, "For setting mup shapes, expect `model` to be a list of length 1"
@@ -419,8 +420,8 @@ def setup_model_and_optimizer(model_provider_func,
     
 
     optimizer = get_megatron_optimizer(model, no_wd_decay_cond,
-                                       scale_lr_cond, lr_mult)
-    opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
+                                       scale_lr_cond, lr_mult, use_mup)
+    opt_param_scheduler = get_optimizer_param_scheduler(optimizer, use_mup)
 
     if args.load is not None:
         timers = get_timers()

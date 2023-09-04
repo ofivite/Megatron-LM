@@ -298,7 +298,7 @@ def _get_coord_data(setups, data_iterator, nsteps=3, nseeds=1,
             
             # Instantiate model and optimiser
             model_type = ModelType.encoder_or_decoder
-            model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, model_type)
+            model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, model_type, model_config.use_mup)
             assert len(model) == 1, 'For _get_coord_data(), model should be a list of length 1'
 
             # Turn on training mode which enables dropout.

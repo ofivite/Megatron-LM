@@ -829,7 +829,7 @@ class ParallelTransformerLayer(MegatronModule):
 
         # Retriever (bi-directional transformer with cross attention)
         if layer_type == LayerType.retro_decoder_with_retriever:
-            if args.use_mup:
+            if config.use_mup:
                 raise NotImplementedError('Retriever initialisation is not yet adapted for muP.')
             self.retriever = ParallelTransformer(
                 config.init_method,
@@ -1426,7 +1426,7 @@ class ParallelTransformer(MegatronModule):
                     self_attn_mask_type=self_attn_mask_type,
                     drop_path_rate=self.drop_path_rates[layer_number - 1])
             else:
-                if args.use_mup:
+                if config.use_mup:
                     raise NotImplementedError('Initialisation of the model with transformer_engine is not yet adapted for muP.')
                 return transformer_engine.pytorch.TransformerLayer(
                     config.hidden_size,

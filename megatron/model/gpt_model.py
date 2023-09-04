@@ -9,19 +9,10 @@ from megatron.core import tensor_parallel
 from .module import MegatronModule
 
 from .enums import AttnMaskType
-from .language_model import parallel_lm_logits
 from .language_model import get_language_model
 
 
-def post_language_model_processing(lm_output, labels, logit_weights,
-                                   parallel_output,
-                                   fp16_lm_cross_entropy):
-
-    # Output. Format [s b h]
-    output = parallel_lm_logits(
-        lm_output,
-        logit_weights,
-        parallel_output)
+def post_language_model_processing(output, labels, fp16_lm_cross_entropy):
 
     if labels is None:
         # [s b h] => [b s h]
@@ -52,12 +43,11 @@ class GPTModel(MegatronModule):
         args = get_args()
         super().__init__(config=config, share_embeddings_and_output_weights=not args.untie_embeddings_and_output_weights)
 
-        self.parallel_output = parallel_output
         self.pre_process = pre_process
         self.post_process = post_process
         self.fp16_lm_cross_entropy = args.fp16_lm_cross_entropy
         self.untie_embeddings_and_output_weights = args.untie_embeddings_and_output_weights
-        self.use_mup = args.use_mup
+        self.use_mup = config.use_mup
 
         self.language_model, self._language_model_key = get_language_model(
             config=config,
@@ -65,10 +55,9 @@ class GPTModel(MegatronModule):
             add_pooler=False,
             encoder_attn_mask_type=AttnMaskType.causal,
             pre_process=self.pre_process,
-            post_process=self.post_process)
+            post_process=self.post_process,
+            parallel_output=parallel_output)
         
-        if not args.untie_embeddings_and_output_weights:
-            self.initialize_word_embeddings()
 
     def set_input_tensor(self, input_tensor):
         """See megatron.model.transformer.set_input_tensor()"""
@@ -90,19 +79,9 @@ class GPTModel(MegatronModule):
             inference_params=inference_params)
 
         if self.post_process:
-            output_layer_weight = self.language_model.output_layer.weight if self.untie_embeddings_and_output_weights \
-                                                            else self.shared_embedding_or_output_weight()
             lm_output = post_language_model_processing(
-                lm_output, labels,
-                output_layer_weight,
-                self.parallel_output,
-                self.fp16_lm_cross_entropy)
-            
-            # additionaly scale output logits by the d_model ratio (\tilde{d} in muP paper notations, see Appendix B.1) 
-            if self.use_mup:
-                assert hasattr(output_layer_weight, "infshape"), (
-                    "No infshape attribute found for the output layer. Please check that mup.set_base_shapes(...) was called.")
-                lm_output = lm_output / output_layer_weight.infshape.width_mult()
+                            lm_output, labels, self.fp16_lm_cross_entropy
+                            )
                 
         return lm_output
 
@@ -112,20 +91,11 @@ class GPTModel(MegatronModule):
         state_dict_[self._language_model_key] \
             = self.language_model.state_dict_for_save_checkpoint(
                 prefix=prefix, keep_vars=keep_vars)
-        # Save word_embeddings.
-        if self.post_process and not self.pre_process and not self.untie_embeddings_and_output_weights:
-            state_dict_[self._word_embeddings_for_head_key] \
-                = self.word_embeddings.state_dict(prefix=prefix,
-                                                  keep_vars=keep_vars)
         return state_dict_
 
     def load_state_dict(self, state_dict, strict=True):
         """Customized load."""
 
-        # Load word_embeddings.
-        if self.post_process and not self.pre_process and not self.untie_embeddings_and_output_weights:
-            self.word_embeddings.load_state_dict(
-                state_dict[self._word_embeddings_for_head_key], strict=strict)
         if self._language_model_key in state_dict:
             state_dict = state_dict[self._language_model_key]
         self.language_model.load_state_dict(state_dict, strict=strict)
