@@ -314,12 +314,11 @@ class Embedding(MegatronModule):
 
 class OutputLogits(MegatronModule):
 
-    def __init__(self, logit_weights, use_mup, parallel_output, width_mult=None):
+    def __init__(self, logit_weights, use_mup, parallel_output):
         super(OutputLogits, self).__init__()
         self.logit_weights = logit_weights
         self.use_mup = use_mup
         self.parallel_output = parallel_output
-        self.width_mult = width_mult
         
     def forward(self, lm_output):
 
@@ -329,14 +328,10 @@ class OutputLogits(MegatronModule):
             self.logit_weights,
             self.parallel_output)
         
-        if self.width_mult is not None:
-            output = output / self.width_mult
-        elif self.use_mup: # additionaly scale output logits by the d_model ratio (\tilde{d} in muP paper notations, see Appendix B.1) 
+        if self.use_mup: # additionaly scale output logits by the d_model ratio (\tilde{d} in muP paper notations, see Appendix B.1) 
             assert hasattr(self.logit_weights, "infshape"), (
                 "No infshape attribute found for the output layer. Please check that mup.set_base_shapes(...) was called.")
             output = output / self.logit_weights.infshape.width_mult()
-        # else:
-        #     raise NotImplementedError('muP is not yet implemented for non-muP models.')
 
         return output
     
@@ -460,7 +455,7 @@ class TransformerLanguageModel(MegatronModule):
 
             output_layer_weight = self.output_layer.weight if self.untie_embeddings_and_output_weights \
                                                             else self.shared_embedding_or_output_weight()
-            self.output_logits = OutputLogits(output_layer_weight, config.use_mup, parallel_output=parallel_output, width_mult=width_mult)
+            self.output_logits = OutputLogits(output_layer_weight, config.use_mup, parallel_output=parallel_output)
             self._output_logits_key = 'output_logits'
 
     def set_input_tensor(self, input_tensor):

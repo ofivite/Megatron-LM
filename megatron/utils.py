@@ -298,7 +298,7 @@ def _get_coord_data(setups, data_iterator, nsteps=3, nseeds=1,
             
             # Instantiate model and optimiser
             model_type = ModelType.encoder_or_decoder
-            model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, model_type, model_config.use_mup)
+            model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, model_type, use_mup=model_config.use_mup)
             assert len(model) == 1, 'For _get_coord_data(), model should be a list of length 1'
 
             # Turn on training mode which enables dropout.
@@ -379,15 +379,11 @@ def mup_coord_check(width_dimensions, data_iterator, nsteps, nseeds, save_dir, l
 
     # collect statistics into dataframes for each model width & seed across `nsteps` 
     df_mup = _get_coord_data(setups_mup, data_iterator, nsteps, nseeds)
-    df_sp = _get_coord_data(setups_sp, data_iterator, nsteps, nseeds)
-
+    df_mup.to_csv(f'{save_dir}/coord_check_muP.{torch.distributed.get_rank()}.csv')
+    
     # plot check results and save
     plot_coord_data(df_mup, legend=legend,
                     save_to=f"{save_dir}/coord_check_muP.{torch.distributed.get_rank()}.jpg",
                     suptitle=f'muP Transformer {args.optimizer} lr={args.lr} nseeds={nseeds}',
                     face_color='xkcd:light grey'
                     ) 
-    plot_coord_data(df_sp, legend=legend,
-                    save_to=f"{save_dir}/coord_check_SP.{torch.distributed.get_rank()}.jpg",
-                    suptitle=f'SP Transformer {args.optimizer} lr={args.lr} nseeds={nseeds}',
-                    face_color=None)
