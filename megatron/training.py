@@ -20,6 +20,7 @@ from megatron import get_num_microbatches
 from megatron import is_last_rank
 from megatron import update_num_microbatches
 from megatron.core import mpu, tensor_parallel
+from megatron.core.utils import get_model_config
 from megatron import print_rank_0
 from megatron import print_rank_last
 from megatron.checkpointing import load_checkpoint
@@ -40,7 +41,6 @@ from megatron.utils import calc_params_l2_norm
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
-from megatron.arguments import core_transformer_config_from_args
 
 
 def print_datetime(string):
@@ -115,6 +115,7 @@ def pretrain(train_valid_test_dataset_provider,
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
+    config = get_model_config(model[0])
 
     # Data stuff.
     timers('train/valid/test-data-iterators-setup', log_level=0).start(
@@ -166,9 +167,9 @@ def pretrain(train_valid_test_dataset_provider,
         iteration = 0
         if args.do_train and args.train_iters > 0:
             iteration = train(forward_step_func,
-                            model, optimizer, opt_param_scheduler,
-                            train_data_iterator, valid_data_iterator,
-                            process_non_loss_data_func)
+                              model, optimizer, opt_param_scheduler,
+                              train_data_iterator, valid_data_iterator,
+                              process_non_loss_data_func, config)
 
         print_datetime('after training is done')
 
@@ -179,16 +180,15 @@ def pretrain(train_valid_test_dataset_provider,
 
         iteration = args.iteration
 
-    config = core_transformer_config_from_args(args)
     if args.do_valid:
-        prefix = f'iteration {iteration} on {args.eval_iters * args.global_batch_size}-sample draw from validation set'
+        prefix = f'iteration {iteration} on validation set'
         evaluate_and_print_results(prefix, forward_step_func,
                                    valid_data_iterator, model,
                                    iteration, process_non_loss_data_func, config,
                                    verbose=True, write_to_tensorboard=not args.skip_train)
 
     if args.do_test:
-        prefix = f'iteration {iteration} on {args.eval_iters * args.global_batch_size}-sample draw from test set'
+        prefix = f'iteration {iteration} on test set'
         evaluate_and_print_results(prefix, forward_step_func,
                                    test_data_iterator, model,
                                    iteration, process_non_loss_data_func, config,
@@ -615,38 +615,54 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         timers.write(timers_to_log, writer, iteration,
                      normalizer=total_iterations)
     if writer and (iteration % args.tensorboard_log_interval == 0):
+        writer.add_scalar('steps-vs-samples/y=steps,x=samples', iteration, args.consumed_train_samples)
+        writer.add_scalar('steps-vs-samples/y=samples,x=steps', args.consumed_train_samples, iteration)
+        writer.add_scalar('steps-vs-tokens/y=steps,x=tokens', iteration, args.consumed_train_samples * args.seq_length)
+        writer.add_scalar('steps-vs-tokens/y=tokens,x=steps', args.consumed_train_samples * args.seq_length, iteration)
         if args.log_learning_rate_to_tensorboard:
-            writer.add_scalar('learning-rate', learning_rate, iteration)
-            writer.add_scalar('learning-rate vs samples', learning_rate,
+            writer.add_scalar('learning-rate/learning-rate', learning_rate, iteration)
+            writer.add_scalar('learning-rate/learning-rate vs samples', learning_rate,
                               args.consumed_train_samples)
+            writer.add_scalar('learning-rate/learning-rate vs tokens', learning_rate,
+                              args.consumed_train_samples * args.seq_length)
         if args.log_batch_size_to_tensorboard:
-            writer.add_scalar('batch-size', batch_size, iteration)
-            writer.add_scalar('batch-size vs samples', batch_size,
+            writer.add_scalar('batch-size/batch-size', batch_size, iteration)
+            writer.add_scalar('batch-size/batch-size vs samples', batch_size,
                               args.consumed_train_samples)
         for key in loss_dict:
-            writer.add_scalar(key , loss_dict[key], iteration)
-            writer.add_scalar(key + ' vs samples', loss_dict[key],
+            writer.add_scalar(f"lm-loss-training/{key}", loss_dict[key], iteration)
+            writer.add_scalar(f"lm-loss-training/{key}" + ' vs samples', loss_dict[key],
                               args.consumed_train_samples)
-        if args.log_loss_scale_to_tensorboard:
-            writer.add_scalar('loss-scale', loss_scale, iteration)
-            writer.add_scalar('loss-scale vs samples', loss_scale,
+            writer.add_scalar(f"lm-loss-training/{key}" + ' vs tokens', loss_dict[key],
+                              args.consumed_train_samples * args.seq_length)
+        if args.log_loss_scale_to_tensorboard and args.fp16:
+            writer.add_scalar('loss-scale/loss-scale', loss_scale, iteration)
+            writer.add_scalar('loss-scale/loss-scale vs samples', loss_scale,
                               args.consumed_train_samples)
+            writer.add_scalar('loss-scale/loss-scale vs tokens', loss_scale,
+                              args.consumed_train_samples * args.seq_length)
         if args.log_world_size_to_tensorboard:
             writer.add_scalar('world-size', args.world_size, iteration)
             writer.add_scalar('world-size vs samples', args.world_size,
                               args.consumed_train_samples)
         if grad_norm is not None:
-            writer.add_scalar('grad-norm', grad_norm, iteration)
-            writer.add_scalar('grad-norm vs samples', grad_norm,
+            writer.add_scalar('grad-norm/grad-norm', grad_norm, iteration)
+            writer.add_scalar('grad-norm/grad-norm vs samples', grad_norm,
                               args.consumed_train_samples)
+            writer.add_scalar('grad-norm/grad-norm vs tokens', grad_norm,
+                              args.consumed_train_samples * args.seq_length)
         if num_zeros_in_grad is not None:
-            writer.add_scalar('num-zeros', num_zeros_in_grad, iteration)
-            writer.add_scalar('num-zeros vs samples', num_zeros_in_grad,
+            writer.add_scalar('num-zeros/num-zeros', num_zeros_in_grad, iteration)
+            writer.add_scalar('num-zeros/num-zeros vs samples', num_zeros_in_grad,
                               args.consumed_train_samples)
+            writer.add_scalar('num-zeros/num-zeros vs tokens', num_zeros_in_grad,
+                              args.consumed_train_samples * args.seq_length)
         if params_norm is not None:
-            writer.add_scalar('params-norm', params_norm, iteration)
-            writer.add_scalar('params-norm vs samples', params_norm,
+            writer.add_scalar('params-norm/params-norm', params_norm, iteration)
+            writer.add_scalar('params-norm/params-norm vs samples', params_norm,
                               args.consumed_train_samples)
+            writer.add_scalar('params-norm/params-norm vs tokens', params_norm,
+                              args.consumed_train_samples * args.seq_length)
         if args.log_memory_to_tensorboard:
             mem_stats = torch.cuda.memory_stats()
             writer.add_scalar(
@@ -676,6 +692,9 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         vocab_size = args.padded_vocab_size
 
         samples_per_sec = batch_size / elapsed_time_per_iteration
+        samples_per_sec_per_replica = samples_per_sec / args.data_parallel_size
+        tokens_per_sec = samples_per_sec * seq_len
+        tokens_per_sec_per_replica = tokens_per_sec / args.data_parallel_size
 
         # General TFLOPs formula (borrowed from Equation 3 in Section 5.1 of
         # https://arxiv.org/pdf/2104.04473.pdf).
@@ -691,7 +710,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         # https://github.com/bigscience-workshop/Megatron-DeepSpeed/pull/283#issue-1260805063
         # for more details.
 
-        coefficient = 24
+        coefficient = 32 if args.t5_swiglu else 24
 
         flops_per_iteration = (
             coefficient * checkpoint_activations_factor * batch_size
@@ -708,8 +727,23 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
 
         if writer:
             if args.log_timers_to_tensorboard:
-                writer.add_scalar('iteration-time',
+                writer.add_scalar('iteration-time/iteration-time',
                                   elapsed_time_per_iteration, iteration)
+                writer.add_scalar('iteration-time/iteration-time vs samples',
+                                  elapsed_time_per_iteration, args.consumed_train_samples)
+                writer.add_scalar('iteration-time/iteration-time vs tokens',
+                                  elapsed_time_per_iteration, args.consumed_train_samples * args.seq_length)
+                writer.add_scalar('iteration-time/samples per second',
+                                  samples_per_sec, iteration)
+                writer.add_scalar('iteration-time/samples per second per replica',
+                                  samples_per_sec_per_replica, iteration)
+                writer.add_scalar('iteration-time/tokens per second',
+                                  tokens_per_sec, iteration)
+                writer.add_scalar('iteration-time/tokens per second per replica',
+                                  tokens_per_sec_per_replica, iteration)
+                writer.add_scalar('iteration-time/TFLOPs per gpu (estimated)',
+                                  tflops, iteration)
+                
         log_string = ' iteration {:8d}/{:8d} |'.format(
             iteration, args.train_iters)
         log_string += ' consumed samples: {:12d} |'.format(
@@ -764,7 +798,7 @@ def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler):
 
 def train(forward_step_func, model, optimizer, opt_param_scheduler,
           train_data_iterator, valid_data_iterator,
-          process_non_loss_data_func):
+          process_non_loss_data_func, config):
     """Train the model function."""
     args = get_args()
     timers = get_timers()
@@ -782,8 +816,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     # Iterations.
     iteration = args.iteration
 
-    # Translate args to core configuration
-    config = core_transformer_config_from_args(args)
+    # Setup some training config params
     config.grad_scale_func = optimizer.scale_loss
     config.timers = timers
 
@@ -791,6 +824,12 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     print_datetime('before the start of training step')
     report_memory_flag = True
     while iteration < args.train_iters:
+        if args.profile and \
+           iteration == args.profile_step_start and \
+           torch.distributed.get_rank() in args.profile_ranks:
+            torch.cuda.cudart().cudaProfilerStart()
+            torch.autograd.profiler.emit_nvtx(record_shapes=True).__enter__()
+
         update_num_microbatches(args.consumed_train_samples)
         args.curr_iteration = iteration
         loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
@@ -871,6 +910,10 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             print_datetime('exiting program at iteration {}'.format(iteration))
             sys.exit()
 
+        if args.profile and \
+           iteration == args.profile_step_end and \
+           torch.distributed.get_rank() in args.profile_ranks:
+            torch.cuda.cudart().cudaProfilerStop()
 
     return iteration
 
@@ -893,13 +936,19 @@ def evaluate(forward_step_func,
 
     total_loss_dict = {}
 
+    # make validation batch size independent from training batch size
+    eval_batch_size = args.global_batch_size
+    eval_num_microbatches = eval_batch_size // \
+        (args.micro_batch_size * args.data_parallel_size)
+
     with torch.no_grad():
         iteration = 0
+        if verbose:
+            print_rank_0(f'Evaluating on {args.eval_iters * eval_batch_size} samples')
         while iteration < args.eval_iters:
             iteration += 1
-            if verbose and iteration % args.log_interval == 0:
-                print_rank_0('Evaluating iter {}/{}'.format(iteration,
-                                                            args.eval_iters))
+            if verbose:
+                print_rank_0(f'Evaluating iter {iteration}/{args.eval_iters}')
 
             forward_backward_func = get_forward_backward_func()
             # Don't care about timing during evaluation
@@ -908,7 +957,7 @@ def evaluate(forward_step_func,
                 forward_step_func=forward_step_func,
                 data_iterator=data_iterator,
                 model=model,
-                num_microbatches=get_num_microbatches(),
+                num_microbatches=eval_num_microbatches,
                 seq_length=args.seq_length,
                 micro_batch_size=args.micro_batch_size,
                 decoder_seq_length=args.decoder_seq_length,
@@ -926,9 +975,8 @@ def evaluate(forward_step_func,
                         total_loss_dict[key] = total_loss_dict.get(
                             key, torch.cuda.FloatTensor([0.0])) + loss_dict[key]
 
-            args.consumed_valid_samples += mpu.get_data_parallel_world_size() \
-                                           * args.micro_batch_size \
-                                           * get_num_microbatches()
+            args.consumed_valid_samples += eval_batch_size
+        
         collected_non_loss_data = None
         if process_non_loss_data_func is not None and is_last_rank():
             collected_non_loss_data = forward_backward_func(
@@ -947,7 +995,7 @@ def evaluate(forward_step_func,
         model_module.train()
 
     for key in total_loss_dict:
-        total_loss_dict[key] /= args.eval_iters * get_num_microbatches()
+        total_loss_dict[key] /= args.eval_iters * eval_num_microbatches
 
     return total_loss_dict, collected_non_loss_data
 
@@ -977,11 +1025,16 @@ def evaluate_and_print_results(prefix, forward_step_func,
             writer.add_scalar('{} validation vs samples'.format(key),
                               total_loss_dict[key].item(),
                               args.consumed_train_samples)
+            writer.add_scalar('{} validation vs tokens'.format(key),
+                              total_loss_dict[key].item(),
+                              args.consumed_train_samples * args.seq_length)
             if args.log_validation_ppl_to_tensorboard:
                 writer.add_scalar('{} validation ppl'.format(key), ppl,
                                   iteration)
                 writer.add_scalar('{} validation ppl vs samples'.format(key),
                                   ppl, args.consumed_train_samples)
+                writer.add_scalar('{} validation ppl vs tokens'.format(key),
+                                  ppl, args.consumed_train_samples * args.seq_length)
 
     if process_non_loss_data_func is not None and writer and is_last_rank():
         process_non_loss_data_func(collected_non_loss_data, iteration, writer)
@@ -1053,8 +1106,11 @@ def build_train_valid_test_data_loaders(
         # Build dataloders.
         train_dataloader = build_pretraining_data_loader(
             train_ds, args.consumed_train_samples)
-        valid_dataloader = build_pretraining_data_loader(
-            valid_ds, args.consumed_valid_samples)
+        if args.skip_train:
+            valid_dataloader = build_pretraining_data_loader(valid_ds, 0)
+        else:
+            valid_dataloader = build_pretraining_data_loader(
+                valid_ds, args.consumed_valid_samples)
         test_dataloader = build_pretraining_data_loader(test_ds, 0)
 
         # Flags to know if we need to do training/validation/testing.
