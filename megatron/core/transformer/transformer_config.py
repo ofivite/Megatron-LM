@@ -3,11 +3,12 @@
 from dataclasses import dataclass
 from typing import Callable
 
+import math
 import torch
 import torch.nn.functional as F
 
 from megatron.core import ModelParallelConfig
-from megatron.core.utils import init_method_normal, scaled_init_method_normal
+from megatron.core.utils import init_method_normal
 
 
 @dataclass
@@ -47,22 +48,32 @@ class TransformerConfig(ModelParallelConfig):
 
         activation_func (Callable): Activation function to use for the non-linearity in the MLP. Defaults to F.gelu.
 
+        # mup
+        use_mup_norm_factor (bool): If true, scale self-attention scores by 1/d_model instead of 1/sqrt(d_model). Defaults to False.
+        use_mup (bool): If true, use muP initialization and scaling. Defaults to False.
+        
         # initialization
-        init_method (Callable): Method to initialize weights. Note that bias is always set to
+        init_method_type (str): Type of weight initialization method. Defaults to 'normal'.
+
+        input_init_method (Callable): Method to initialize weights of input word embeddings. Note that bias is always set to
                                 zero. Should be a function that takes a single Tensor and
-                                initializes it. Defaults to
-                                megatron.core.utils.init_method_normal(init_method_std) which is
-                                torch.nn.init.normal_ with mean=0.0 and std=init_method_Std.
+                                initializes it. Defaults to None.
 
-        output_layer_init_method (Callable): Method to initialize weights of the output layer of
-                                             both attention and MLP blocks. Defaults to
-                                             megatron.core.utils.scaled_init_method_normal(init_method_std)
-                                             which is torch.nn.init.normal_ with mean=0.0 and
-                                             std=init_method_std / math.sqrt(2.0 * num_layers).
+        hidden_init_method (Callable): Method to initialize hidden weights in MLP blocks and Attention heads 
+                                except for the output layer in the block. Note that bias is always set to zero.
+                                Should be a function that takes a single Tensor and initializes it. 
+                                Defaults to None.
 
-        init_method_std (float): Standard deviation of the zero mean normal for the default
-                                 initialization method, not used if init_method and
-                                 output_layer_init_method are provided. Defaults to 0.02.
+        scaled_hidden_init_method (Callable): Method to initialize hidden weights of the output layer of
+                                both attention and MLP blocks. It additionally introduces a scaling factor
+                                of 1/math.sqrt(2.0 * num_layers) comparing to hidden_init_method.
+                                Defaults to None.
+
+        output_init_method (Callable): Method to initialize weights of the output unembedding layer. Note that bias is always set to
+                                zero. Should be a function that takes a single Tensor and
+                                initializes it. Defaults to None.
+
+        init_method_std (float): Standard deviation of the zero mean normal in case `init_method_type == "normal"`. Defaults to 0.02.
 
         # mixed-precision
         apply_query_key_layer_scaling (bool): If true, scale Q * K^T by 1 / layer-number. Defaults to True.
@@ -141,10 +152,16 @@ class TransformerConfig(ModelParallelConfig):
     gated_linear_unit: bool = False
     t5_gated_linear_unit: bool = False
     activation_func: Callable = F.gelu
+    use_mup_norm_factor: bool = False
 
     # initialization
-    init_method: Callable = None
-    output_layer_init_method: Callable = None
+    use_mup: bool = False
+    init_method_type: str = 'normal'
+    perform_initialization: bool = True
+    input_init_method: Callable = None
+    hidden_init_method: Callable = None
+    output_init_method: Callable = None
+    scaled_hidden_init_method: Callable = None
     init_method_std: float = 0.02
 
     # mixed-precision
@@ -252,10 +269,29 @@ class TransformerConfig(ModelParallelConfig):
             if self.activation_func != F.gelu:
                 raise ValueError(f'When bias_gelu_fusion is True, activation_func must be F.gelu.')
 
-        if self.init_method is None:
-            self.init_method = init_method_normal(self.init_method_std)
+        # weight initialization
+        if self.init_method_type == 'normal':
+            # in muP case, constant with width scaling (columns 1,2 in Table 8 of muP paper)
+            self.input_init_method = init_method_normal(self.init_method_std) 
+            self.output_init_method = init_method_normal(self.init_method_std) 
+            if self.use_mup:
+                assert self.perform_initialization, "muP requires perform_initialization=True"
+                # scaling with width as 1/sqrt(d) (column 3 in Table 8 of muP paper)
+                sigma = self.init_method_std / self.hidden_size**0.5
+                self.hidden_init_method = init_method_normal(sigma)
+                self.scaled_hidden_init_method = init_method_normal(sigma / math.sqrt(2.0 * self.num_layers))
+            else:
+                self.hidden_init_method = init_method_normal(self.init_method_std)
+                self.scaled_hidden_init_method = init_method_normal(self.init_method_std / math.sqrt(2.0 * self.num_layers))
+        elif self.init_method_type == 'xavier_uniform':
+            if self.use_mup:
+                raise NotImplementedError("Xavier uniform init is not yet supported together with muP.")
+            self.input_init_method = torch.nn.init.xavier_uniform_
+            self.hidden_init_method = torch.nn.init.xavier_uniform_
+            self.output_init_method = torch.nn.init.xavier_uniform_
+            self.scaled_hidden_init_method = torch.nn.init.xavier_uniform_
+        else:
+            raise ValueError(f"Unknown init_method_type: {self.init_method_type}")
 
-        if self.output_layer_init_method is None:
-            self.output_layer_init_method = scaled_init_method_normal(
-                self.init_method_std, self.num_layers
-            )
+        # whether to scale self-attention scores by 1/d_model instead of 1/sqrt(d_model)
+        self.use_mup_norm_factor = True if self.use_mup else False 

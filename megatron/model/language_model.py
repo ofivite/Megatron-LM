@@ -14,7 +14,6 @@ from .enums import AttnMaskType, LayerType, PositionEmbeddingType
 from .module import MegatronModule
 from .transformer import ParallelTransformer
 from .utils import get_linear_layer
-from .utils import init_method_normal, scaled_init_method_normal
 
 
 def parallel_lm_logits(input_, word_embeddings_weight, parallel_output,
@@ -56,12 +55,6 @@ def get_language_model(config, num_tokentypes, add_pooler,
                        pre_process=True, post_process=True):
     """Build language model and return along with the key to save."""
     args = get_args()
-    if config.init_method is None:
-        config.init_method = init_method_normal(config.init_method_std)
-
-    if config.output_layer_init_method is None:
-        config.output_layer_init_method = scaled_init_method_normal(config.init_method_std,
-                                                                    config.num_layers)
 
     # Language model.
     language_model = TransformerLanguageModel(
@@ -146,7 +139,7 @@ class Embedding(MegatronModule):
         super(Embedding, self).__init__()
 
         self.hidden_size = hidden_size
-        self.init_method = config.init_method
+        self.init_method = config.input_init_method
         self.num_tokentypes = num_tokentypes
 
         args = get_args()
@@ -155,7 +148,7 @@ class Embedding(MegatronModule):
         self.embedding_weights_in_fp32 = embedding_weights_in_fp32
         self.params_dtype = args.params_dtype
         self.word_embeddings = tensor_parallel.VocabParallelEmbedding(
-            vocab_size, self.hidden_size, config=config, init_method=config.init_method)
+            vocab_size, self.hidden_size, config=config, init_method=self.init_method)
         self._word_embeddings_key = 'word_embeddings'
 
         # Position embedding (serial).
@@ -350,7 +343,6 @@ class TransformerLanguageModel(MegatronModule):
         self.post_process = post_process
         self.hidden_size = config.hidden_size
         self.num_tokentypes = num_tokentypes
-        self.init_method = config.init_method
         self.add_encoder = add_encoder
         self.encoder_attn_mask_type = encoder_attn_mask_type
         self.add_decoder = add_decoder
@@ -422,15 +414,17 @@ class TransformerLanguageModel(MegatronModule):
         if self.post_process:
             # Pooler.
             if self.add_pooler:
-                self.pooler = Pooler(self.hidden_size, self.init_method)
+                if config.use_mup:
+                    raise NotImplementedError('Pooler initialisation is not yet adapted for muP.')
+                self.pooler = Pooler(self.hidden_size, self.output_init_method)
                 self._pooler_key = 'pooler'
 
             if self.untie_embeddings_and_output_weights:
                 self.output_layer = tensor_parallel.ColumnParallelLinear(
-                    args.hidden_size,
+                    config.hidden_size,
                     args.padded_vocab_size,
                     config=config,
-                    init_method=self.init_method,
+                    init_method=config.output_init_method,
                     bias=False) # Setting bias to False always to keep it consistent with embedding tying that also does not have a bias.
                 self._output_layer_key = 'output_layer'
 

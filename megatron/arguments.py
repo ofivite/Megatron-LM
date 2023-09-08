@@ -444,9 +444,6 @@ def core_transformer_config_from_args(args):
         kw_args['activation_func'] = torch.nn.Identity()
         kw_args['t5_gated_linear_unit'] = True
         kw_args['bias_gelu_fusion'] = False
-    if args.init_method_xavier_uniform:
-        kw_args['init_method'] = torch.nn.init.xavier_uniform_
-        kw_args['scaled_init_method'] = torch.nn.init.xavier_uniform_
     kw_args['fp8'] = args.fp8_e4m3 or args.fp8_hybrid
     kw_args['fp8_e4m3'] = args.fp8_e4m3
     kw_args['fp8_margin'] = args.fp8_hybrid
@@ -797,6 +794,26 @@ def _add_training_args(parser):
                        'uniformly divided recompute unit, '
                        '2) block: the number of individual Transformer layers '
                        'to recompute within each pipeline stage.')
+    
+    # mup
+    group.add_argument('--use-mup', action='store_true',
+                       help='Whether to enable mu parametrisation of the model'
+                       'with the corresponding rescaling w.r.t the base model.')
+    group.add_argument('--save-mup-base-shapes-to', type=str, default='',
+                        help='directory location to save mup base shapes at')
+    group.add_argument('--set-mup-base-shapes-from', type=str, default='',
+                        help='directory location to load mup base shapes from')
+    group.add_argument('--perform-mup-coord-check', action='store_true',
+                        help='test μ parametrization is correctly implemented by collecting' 
+                            'statistics on coordinate distributions for a few steps of training.')
+    group.add_argument('--mup-coord-check-nsteps', type=int, default=3,
+                        help='Do coord check with this many steps.')
+    group.add_argument('--mup-coord-check-nseeds', type=int, default=1,
+                        help='number of torch.manual_seed for testing correctness of μ parametrization')
+    group.add_argument('--save-mup-coord-check-to', type=str, default='',
+                        help='directory location to save muP coordinate check plots at')
+
+    # profile
     group.add_argument('--profile', action='store_true',
                        help='Enable nsys profiling. When using this option, nsys '
                        'options should be specified in commandline. An example '
@@ -889,11 +906,12 @@ def _add_initialization_args(parser):
     group.add_argument('--data-parallel-random-init', action='store_true',
                        help='Enable random initialization of params '
                        'across data parallel ranks')
+    group.add_argument('--init-method-type', type=str, default='normal',
+                       choices=['normal', 'xavier_uniform'],
+                       help='Method of weight initialisation')
     group.add_argument('--init-method-std', type=float, default=0.02,
-                       help='Standard deviation of the zero mean normal '
-                       'distribution used for weight initialization.')
-    group.add_argument('--init-method-xavier-uniform', action='store_true',
-                       help='Enable Xavier uniform parameter initialization')
+                       help='In case --init-method-type==normal, standard deviation'
+                       'of the zero mean normal distribution used for weight initialization')
 
     return parser
 

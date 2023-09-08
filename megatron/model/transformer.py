@@ -124,7 +124,7 @@ class ParallelMLP(MegatronModule):
                 config.hidden_size,
                 ffn_hidden_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=self.add_bias,
                 gather_output=False,
             )
@@ -133,7 +133,7 @@ class ParallelMLP(MegatronModule):
                 config.hidden_size,
                 ffn_hidden_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=self.add_bias,
                 gather_output=False,
                 skip_bias_add=True,
@@ -167,7 +167,7 @@ class ParallelMLP(MegatronModule):
             config.ffn_hidden_size,
             config.hidden_size,
             config=config,
-            init_method=config.output_layer_init_method,
+            init_method=config.scaled_hidden_init_method,
             bias=self.add_bias,
             input_is_parallel=True
         )
@@ -609,7 +609,7 @@ class ParallelAttention(MegatronModule):
                 config.hidden_size,
                 query_projection_size + 2 * kv_projection_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=args.add_bias_linear,
                 gather_output=False)
         else:
@@ -623,7 +623,7 @@ class ParallelAttention(MegatronModule):
                 config.hidden_size,
                 query_projection_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=config.add_bias_linear,
                 gather_output=False)
 
@@ -631,7 +631,7 @@ class ParallelAttention(MegatronModule):
                 config.hidden_size,
                 2 * kv_projection_size,
                 config=config,
-                init_method=config.init_method,
+                init_method=config.hidden_init_method,
                 bias=config.add_bias_linear,
                 gather_output=False)
 
@@ -658,7 +658,7 @@ class ParallelAttention(MegatronModule):
             query_projection_size,
             config.hidden_size,
             config=config,
-            init_method=config.output_layer_init_method,
+            init_method=config.scaled_hidden_init_method,
             bias=args.add_bias_linear,
             input_is_parallel=True,
             skip_bias_add=True)
@@ -1021,6 +1021,8 @@ class ParallelTransformerLayer(MegatronModule):
 
         # Retriever (bi-directional transformer with cross attention)
         if layer_type == LayerType.retro_decoder_with_retriever:
+            if config.use_mup:
+                raise NotImplementedError('Retriever initialisation is not yet adapted for muP.')
             self.retriever = ParallelTransformer(
                 config=config,
                 model_type=ModelType.retro_encoder,
@@ -1640,8 +1642,8 @@ class ParallelTransformer(MegatronModule):
                     layernorm_epsilon=config.layernorm_epsilon,
                     hidden_dropout=config.hidden_dropout,
                     attention_dropout=config.attention_dropout,
-                    init_method=config.init_method,
-                    output_layer_init_method=config.output_layer_init_method,
+                    init_method=config.hidden_init_method,
+                    output_layer_init_method=config.scaled_hidden_init_method,
                     layer_number=layer_number,
                     kv_channels=config.kv_channels,
                     self_attn_mask_type=self_attn_mask_type.name,
