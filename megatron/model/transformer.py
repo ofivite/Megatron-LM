@@ -559,9 +559,9 @@ class ParallelAttention(MegatronModule):
 
         query_projection_size = config.kv_channels * config.num_attention_heads
         if self.group_query_attention:
-            kv_projection_size = args.kv_channels * args.num_query_groups
+            kv_projection_size = config.kv_channels * args.num_query_groups
         else:
-            kv_projection_size = args.kv_channels * args.num_attention_heads
+            kv_projection_size = config.kv_channels * args.num_attention_heads
 
         self.use_flash_attn = args.use_flash_attn \
             and attention_type == AttnType.self_attn \

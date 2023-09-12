@@ -806,6 +806,8 @@ def _add_training_args(parser):
     group.add_argument('--perform-mup-coord-check', action='store_true',
                         help='test μ parametrization is correctly implemented by collecting' 
                             'statistics on coordinate distributions for a few steps of training.')
+    group.add_argument('--coord-check-width-dimensions', nargs='+', type=int, default=[],
+                        help='model widths to validate μ parametrization correctness via coordinate check')
     group.add_argument('--mup-coord-check-nsteps', type=int, default=3,
                         help='Do coord check with this many steps.')
     group.add_argument('--mup-coord-check-nseeds', type=int, default=1,

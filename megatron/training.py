@@ -143,6 +143,19 @@ def pretrain(train_valid_test_dataset_provider,
     timers.log(['model-and-optimizer-setup',
                 'train/valid/test-data-iterators-setup'], barrier=True)
 
+    # Validate muP parametrisation
+    if args.perform_mup_coord_check:
+        from megatron.utils import mup_coord_check
+
+        # will perform coordinate check for models with given hidden dimensions
+        assert len(args.coord_check_width_dimensions) > 0
+        mup_coord_check(args.coord_check_width_dimensions, train_data_iterator, 
+                        nsteps=args.mup_coord_check_nsteps, 
+                        nseeds=args.mup_coord_check_nseeds,
+                        save_dir=args.save_mup_coord_check_to)
+        print_rank_0("Saved coord check plots... exiting")
+        sys.exit(1)
+
     if not args.skip_train:
         print_rank_0('training ...')
 
@@ -379,9 +392,30 @@ def setup_model_and_optimizer(model_provider_func,
     """Setup model and optimizer."""
     args = get_args()
 
+    # save base shapes
+    if use_mup:
+        from megatron.utils import save_base_shapes
+
+        assert len(args.save_mup_base_shapes_to) > 0 or len(args.set_mup_base_shapes_from) > 0, \
+            "Please specify either --save-mup-base-shapes-to (for computing and saving base model shapes to a given file) \
+                or --set-mup-base-shapes-from (for setting base model shapes from a given file)"
+
+        if args.save_mup_base_shapes_to:
+            base_shapes_filename = f"{args.save_mup_base_shapes_to}/shape.rank-{torch.distributed.get_rank()}"
+            save_base_shapes(base_shapes_filename)
+            sys.exit(1)
+
+    # instantiate model
     model = get_model(model_provider_func, model_type)
     unwrapped_model = unwrap_model(model,
                                    (torchDDP, LocalDDP, Float16Module))
+
+    # set base shapes
+    if use_mup and args.set_mup_base_shapes_from:
+        from mup import set_base_shapes
+        base_shapes_filename = f"{args.set_mup_base_shapes_from}/shape.rank-{torch.distributed.get_rank()}"
+        assert len(model) == 1, "For setting mup shapes, expect `model` to be a list of length 1"
+        set_base_shapes(model[0], base_shapes_filename, rescale_params=False)
 
     optimizer = get_megatron_optimizer(model, no_wd_decay_cond,
                                        scale_lr_cond, lr_mult, use_mup)

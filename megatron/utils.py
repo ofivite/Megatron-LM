@@ -3,6 +3,7 @@
 """General utilities."""
 
 import sys
+import gc
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as torchDDP
@@ -18,6 +19,9 @@ from megatron.core import mpu
 from megatron.core.tensor_parallel import param_is_not_tensor_parallel_duplicate
 from megatron.model.module import param_is_not_shared
 
+import pandas as pd
+from mup import get_shapes, make_base_shapes
+from mup.coord_check import plot_coord_data, _record_coords
 
 def unwrap_model(model, module_instances=(torchDDP)):
     return_list = True
@@ -211,3 +215,175 @@ def print_rank_last(message):
             print(message, flush=True)
     else:
         print(message, flush=True)
+
+
+def save_base_shapes(base_shapes_filename):
+
+    from megatron.core.enums import ModelType
+    from megatron.model import GPTModel
+    from megatron.arguments import core_transformer_config_from_args
+    from megatron.training import get_model
+
+    # take ModelType from pretrain_gpt.py
+    model_type = ModelType.encoder_or_decoder
+
+    # get base model shape
+    # base_model is instantiated as in pretrain_gpt.py
+    base_args = get_args()
+    base_config = core_transformer_config_from_args(base_args)
+    base_model = lambda pre_process=True, post_process=True: GPTModel(
+        base_config,
+        num_tokentypes=0,
+        parallel_output=True,
+        pre_process=pre_process,
+        post_process=post_process
+    )
+    base_model = get_model(base_model, model_type)
+    assert len(base_model) == 1, 'For saving muP shapes, base_model is expected to be a list of length 1'
+    base_shapes = get_shapes(base_model[0])
+    del base_model
+
+    # get delta model shapes corresponding to the base model scaled by `delta_scaling_factor` 
+    # across width dimensions: hidden_size, ffn_hidden_size, kv_channels
+    delta_args = get_args()
+    delta_scaling_factor = 2
+
+    # scale width dimensions
+    # setting `ffn_hidden_size` and `kv_channels` to None will trigger their derivation in __post_init__() of `TransformerConfig` 
+    # NB: make sure that latter is consistent with the duplicated definition in `arguments.py`
+    delta_args.hidden_size *= delta_scaling_factor
+    delta_args.ffn_hidden_size = None 
+    delta_args.kv_channels = None 
+
+    delta_config = core_transformer_config_from_args(delta_args)
+    delta_model = lambda pre_process=True, post_process=True: GPTModel(
+        delta_config,
+        num_tokentypes=0,
+        parallel_output=True,
+        pre_process=pre_process,
+        post_process=post_process
+    )
+    delta_model = get_model(delta_model, model_type)
+    assert len(delta_model) == 1, 'For saving muP shapes, delta_model should be a list of length 1'
+    delta_shapes = get_shapes(delta_model[0])
+    del delta_model
+
+    # derive and save infshapes and its dimensionalitites from base_shapes and delta_shapes
+    make_base_shapes(base_shapes, delta_shapes, savefile=f'{base_shapes_filename}')
+    print('Saved base shapes to', base_shapes_filename)
+
+
+def _get_coord_data(setups, data_iterator, nsteps=3, nseeds=1, 
+                    filter_module_by_name=None,
+                    output_fdict=None, input_fdict=None, param_fdict=None):
+    '''
+    Inner method for `get_coord_data`. This is the adaptation of the corresponding function
+        from `mup.coord_check` to the `Megatron-LM` setup.
+    Train the models in `models` with optimizer given by `optcls` and data from
+    `dataloader` for `nsteps` steps, and record coordinate statistics specified
+    by `output_fdict`, `input_fdict`, `param_fdict`. By default, only `l1` is
+    computed for output activations of each module.
+    
+    '''
+
+    from megatron.core.enums import ModelType
+    from megatron.training import setup_model_and_optimizer, train_step
+    from pretrain_gpt import forward_step
+
+    df = []
+    for i in range(nseeds):
+        torch.manual_seed(i)
+
+        for width, (model_provider, model_config) in setups.items():
+
+            # Instantiate model and optimiser
+            model_type = ModelType.encoder_or_decoder
+            model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider, model_type, use_mup=model_config.use_mup)
+            assert len(model) == 1, 'For _get_coord_data(), model should be a list of length 1'
+
+            # Turn on training mode which enables dropout.
+            for model_module in model:
+                model_module.train()
+
+            step = 0
+            consumed_train_samples = 0
+            while step < nsteps:
+                # add hooks to record per-layer statistics as defined by `_record_coords()`
+                remove_hooks = []
+                for name, module in model[0].named_modules():
+                    if filter_module_by_name and not filter_module_by_name(name):
+                        continue
+                    remove_hooks.append(
+                        module.register_forward_hook(
+                            _record_coords(df, width, name, step+1,
+                                output_fdict=output_fdict,
+                                input_fdict=input_fdict,
+                                param_fdict=param_fdict
+                            )
+                        )
+                    )
+
+                # train for a step
+                loss_dict, skipped_iter, grad_norm, num_zeros_in_grad = \
+                    train_step(forward_step,
+                            data_iterator,
+                            model,
+                            optimizer,
+                            opt_param_scheduler,
+                            model_config)
+                step += 1
+
+                for handle in remove_hooks:
+                    handle.remove()
+
+            del model
+            gc.collect()
+
+    return pd.DataFrame(df)
+
+
+def mup_coord_check(width_dimensions, data_iterator, nsteps, nseeds, save_dir, legend=False):
+
+    def setup_provider(hidden_size, use_mup):
+
+        # override base args with `hidden_size` and `use_mup`
+        # setting `ffn_hidden_size` and `kv_channels` to None will derive them in __post_init__() of `TransformerConfig`
+        _args = get_args()
+        _args.hidden_size = hidden_size
+        _args.ffn_hidden_size = None
+        _args.kv_channels = None
+        _args.use_mup = use_mup
+
+        # return lazy model with updated args
+        model_config = core_transformer_config_from_args(_args)
+        lazy_model = lambda pre_process=True, post_process=True: GPTModel(
+            model_config,
+            num_tokentypes=0,
+            parallel_output=True,
+            pre_process=pre_process,
+            post_process=post_process
+        )
+
+        return (lazy_model, model_config)
+
+    from megatron.model import GPTModel
+    from megatron.arguments import core_transformer_config_from_args
+
+    args = get_args()
+
+    # create dictionary with lazy models+configs for each width and muP/SP
+    setups_mup, setups_sp = {}, {}
+    for width in width_dimensions:
+        setups_mup[width] = setup_provider(width, use_mup=True)
+        setups_sp[width] = setup_provider(width, use_mup=False)
+
+    # collect statistics into dataframes for each model width & seed across `nsteps` 
+    df_mup = _get_coord_data(setups_mup, data_iterator, nsteps, nseeds)
+    df_mup.to_csv(f'{save_dir}/coord_check_muP.{torch.distributed.get_rank()}.csv')
+
+    # plot check results and save
+    plot_coord_data(df_mup, legend=legend,
+                    save_to=f"{save_dir}/coord_check_muP.{torch.distributed.get_rank()}.jpg",
+                    suptitle=f'muP Transformer {args.optimizer} lr={args.lr} nseeds={nseeds}',
+                    face_color='xkcd:light grey'
+                    ) 
