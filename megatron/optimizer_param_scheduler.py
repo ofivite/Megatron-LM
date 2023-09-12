@@ -13,7 +13,8 @@ class OptimizerParamScheduler(object):
                  lr_warmup_steps, lr_decay_steps, lr_decay_style,
                  start_wd, end_wd, wd_incr_steps, wd_incr_style,
                  use_checkpoint_opt_param_scheduler=True,
-                 override_opt_param_scheduler=False):
+                 override_opt_param_scheduler=False,
+                 use_mup=False):
 
         # Class values.
         self.optimizer = optimizer
@@ -44,6 +45,8 @@ class OptimizerParamScheduler(object):
         if self.override_opt_param_scheduler:
             assert not self.use_checkpoint_opt_param_scheduler, 'both override and '\
                 'use-checkpoint are set.'
+
+        self.use_mup = use_mup
 
         # Set the learning rate
         self.step(0)
@@ -131,6 +134,10 @@ class OptimizerParamScheduler(object):
         for group in self.optimizer.param_groups:
             group['lr'] = new_lr * group.get('lr_mult', 1.0)
             group['weight_decay'] = new_wd * group.get('wd_mult', 1.0)
+            if self.use_mup:
+                assert 'mup_lr_mult' in group and 'mup_wd_mult' in group
+                group['lr'] *= group['mup_lr_mult']
+                group['weight_decay'] *= group['mup_wd_mult']
 
 
     def state_dict(self):

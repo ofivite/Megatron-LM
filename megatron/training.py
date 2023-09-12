@@ -110,7 +110,7 @@ def pretrain(train_valid_test_dataset_provider,
     # Model, optimizer, and learning rate.
     timers('model-and-optimizer-setup', log_level=0).start(barrier=True)
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
-        model_provider, model_type)
+        model_provider, model_type, use_mup=args.use_mup)
     timers('model-and-optimizer-setup').stop()
     print_datetime('after model, optimizer, and learning rate '
                    'scheduler are built')
@@ -319,7 +319,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     return model
 
 
-def get_optimizer_param_scheduler(optimizer):
+def get_optimizer_param_scheduler(optimizer, use_mup=False):
     """Build the learning rate scheduler."""
     args = get_args()
 
@@ -364,7 +364,8 @@ def get_optimizer_param_scheduler(optimizer):
         wd_incr_steps=wd_incr_steps,
         wd_incr_style=args.weight_decay_incr_style,
         use_checkpoint_opt_param_scheduler=args.use_checkpoint_opt_param_scheduler,
-        override_opt_param_scheduler=args.override_opt_param_scheduler)
+        override_opt_param_scheduler=args.override_opt_param_scheduler,
+        use_mup=use_mup)
 
     return opt_param_scheduler
 
@@ -373,7 +374,8 @@ def setup_model_and_optimizer(model_provider_func,
                               model_type,
                               no_wd_decay_cond=None,
                               scale_lr_cond=None,
-                              lr_mult=1.0):
+                              lr_mult=1.0,
+                              use_mup=False):
     """Setup model and optimizer."""
     args = get_args()
 
@@ -382,8 +384,8 @@ def setup_model_and_optimizer(model_provider_func,
                                    (torchDDP, LocalDDP, Float16Module))
 
     optimizer = get_megatron_optimizer(model, no_wd_decay_cond,
-                                       scale_lr_cond, lr_mult)
-    opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
+                                       scale_lr_cond, lr_mult, use_mup)
+    opt_param_scheduler = get_optimizer_param_scheduler(optimizer, use_mup)
 
     if args.load is not None:
         timers = get_timers()
