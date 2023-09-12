@@ -220,7 +220,7 @@ class MegatronOptimizer(ABC):
                 unwrapped_model, (torchDDP, LocalDDP, Float16Module))
 
             if unwrapped_model.share_embeddings_and_output_weights:
-                weight = unwrapped_model.shared_embedding_or_output_weight()
+                weight = unwrapped_model.language_model.shared_embedding_or_output_weight()
                 if args.DDP_impl == 'local':
                     grad = weight.main_grad
                 else:

@@ -39,7 +39,7 @@ class MegatronModule(torch.nn.Module):
 
     def shared_embedding_or_output_weight(self):
         if self.pre_process:
-            return self.language_model.embedding.word_embeddings.weight
+            return self.embedding.word_embeddings.weight
         else:
             if not self.share_embeddings_and_output_weights:
                 raise Exception('shared_embedding_or_output_weight() called for last '
@@ -86,7 +86,7 @@ class MegatronModule(torch.nn.Module):
         # NOTE: We don't currently support T5 with the interleaved schedule.
         if not mpu.is_pipeline_first_stage(ignore_virtual=True) and \
                 self.pre_process:
-            self.language_model.embedding.zero_parameters()
+            self.embedding.zero_parameters()
 
         if not torch.distributed.is_initialized():
             if not getattr(MegatronModule, "embedding_warning_printed", False):
@@ -110,8 +110,8 @@ class MegatronModule(torch.nn.Module):
         if mpu.is_rank_in_position_embedding_group() and \
                 args.pipeline_model_parallel_split_rank is not None:
             # TODO: Support tokentype embedding.
-            self.language_model.embedding.cuda()
-            position_embeddings = self.language_model.embedding.position_embeddings
+            self.embedding.cuda()
+            position_embeddings = self.embedding.position_embeddings
             torch.distributed.all_reduce(position_embeddings.weight.data,
                                          group=mpu.get_position_embedding_group())
 
