@@ -250,10 +250,13 @@ def save_base_shapes(base_shapes_filename):
 
     # scale width dimensions
     # setting `ffn_hidden_size` and `kv_channels` to None will trigger their derivation in __post_init__() of `TransformerConfig` 
+    # if not None is passed, scale manually by `delta_scaling_factor`
     # NB: make sure that latter is consistent with the duplicated definition in `arguments.py`
     delta_args.hidden_size *= delta_scaling_factor
-    delta_args.ffn_hidden_size = None 
-    delta_args.kv_channels = None 
+    if delta_args.ffn_hidden_size is not None:
+        delta_args.ffn_hidden_size *= delta_scaling_factor 
+    if delta_args.kv_channels is not None:
+        delta_args.kv_channels *= delta_scaling_factor 
 
     delta_config = core_transformer_config_from_args(delta_args)
     delta_model = lambda pre_process=True, post_process=True: GPTModel(

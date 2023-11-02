@@ -71,7 +71,7 @@ def add_mup_multipliers(param_groups, optimizer_type, decoupled_wd=False):
     """
     new_param_groups = []
 
-    if optimizer_type == 'adam':
+    if optimizer_type == 'adam' or optimizer_type == 'adan':
         for param_group in param_groups:
 
             # new group template with a copy of everything except params
