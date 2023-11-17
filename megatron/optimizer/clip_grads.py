@@ -14,7 +14,8 @@ from megatron.core.tensor_parallel import param_is_not_tensor_parallel_duplicate
 
 def clip_grad_norm_fp32(parameters, grads_for_norm,
                         max_norm, norm_type=2,
-                        model_parallel_group=None):
+                        model_parallel_group=None,
+                        only_return_norm=False):
     """Clips gradient norm of an iterable of parameters whose gradients
        are in fp32.
 
@@ -32,6 +33,7 @@ def clip_grad_norm_fp32(parameters, grads_for_norm,
             infinity norm.
         model_parallel_group (group): given the nature of the distributed
             optimizer, this is passed as an argument.
+        only_return_norm (bool): if True, only return the norm of the gradients.
 
     Returns:
         Total norm of the parameters (viewed as a single vector).
@@ -95,13 +97,14 @@ def clip_grad_norm_fp32(parameters, grads_for_norm,
         total_norm = total_norm.item() ** (1.0 / norm_type)
 
     # Scale.
-    clip_coeff = max_norm / (total_norm + 1.0e-6)
-    if clip_coeff < 1.0:
-        dummy_overflow_buf = torch.cuda.IntTensor([0])
-        multi_tensor_applier(amp_C.multi_tensor_scale,
-                             dummy_overflow_buf,
-                             [grads, grads],
-                             clip_coeff)
+    if not only_return_norm:
+        clip_coeff = max_norm / (total_norm + 1.0e-6)
+        if clip_coeff < 1.0:
+            dummy_overflow_buf = torch.cuda.IntTensor([0])
+            multi_tensor_applier(amp_C.multi_tensor_scale,
+                                dummy_overflow_buf,
+                                [grads, grads],
+                                clip_coeff)
 
     return total_norm
 

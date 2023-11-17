@@ -113,12 +113,13 @@ class MegatronOptimizer(ABC):
         return mpu.get_model_parallel_group()
 
 
-    def clip_grad_norm(self, clip_grad):
+    def clip_grad_norm(self, clip_grad, only_return_norm):
         params = self.get_parameters()
         grads_for_norm = self.get_main_grads_for_grad_norm()
         return clip_grad_norm_fp32(
             params, grads_for_norm, clip_grad,
-            model_parallel_group=self.get_model_parallel_group())
+            model_parallel_group=self.get_model_parallel_group(),
+            only_return_norm=only_return_norm)
 
 
     def count_zeros(self):
@@ -434,7 +435,9 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
             barrier=args.barrier_with_L1_time)
         grad_norm = None
         if self.clip_grad > 0.0:
-            grad_norm = self.clip_grad_norm(self.clip_grad)
+            grad_norm = self.clip_grad_norm(self.clip_grad, only_return_norm=False)
+        else:
+            grad_norm = self.clip_grad_norm(self.clip_grad, only_return_norm=True)
         timers('optimizer-clip-main-grad').stop()
 
         # Count the zeros in the grads.
@@ -741,7 +744,9 @@ class FP32Optimizer(MegatronOptimizer):
             barrier=args.barrier_with_L1_time)
         grad_norm = None
         if self.clip_grad > 0.0:
-            grad_norm = self.clip_grad_norm(self.clip_grad)
+            grad_norm = self.clip_grad_norm(self.clip_grad, only_return_norm=False)
+        else:
+            grad_norm = self.clip_grad_norm(self.clip_grad, only_return_norm=True)
         timers('optimizer-clip-main-grad').stop()
 
         # count the zeros in the grads
